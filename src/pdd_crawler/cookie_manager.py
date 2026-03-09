@@ -13,9 +13,9 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from playwright.async_api import Browser, BrowserContext, Playwright
+from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
-from pdd_crawler.config import COOKIES_DIR, DEFAULT_TIMEOUT
+from pdd_crawler import config
 
 # Anti-detection browser arguments
 _BROWSER_ARGS = [
@@ -42,13 +42,11 @@ _EXTRA_HEADERS = {
 }
 
 # Comprehensive anti-detection init script
-# PDD checks navigator.webdriver, plugins, languages, chrome object,
-# permissions, WebGL renderer, and other fingerprints.
 _WEBDRIVER_OVERRIDE_SCRIPT = """
 // 1. Remove webdriver flag
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
-// 2. Chrome object mock — PDD checks for window.chrome existence
+// 2. Chrome object mock
 window.chrome = window.chrome || {};
 window.chrome.runtime = window.chrome.runtime || {
     onMessage: { addListener: function(){}, removeListener: function(){} },
@@ -80,7 +78,7 @@ window.chrome.csi = window.chrome.csi || function() {
     return { startE: Date.now(), onloadT: Date.now(), pageT: Date.now(), tran: 15 };
 };
 
-// 3. Realistic plugins mock (empty array is a bot signal)
+// 3. Realistic plugins mock
 Object.defineProperty(navigator, 'plugins', {
     get: () => {
         const plugins = [
@@ -120,14 +118,14 @@ delete window.__playwright;
 delete window.__pw_manual;
 delete window.__PW_inspect;
 
-// 7. Override permissions query to avoid detection
+// 7. Override permissions query
 const originalQuery = window.navigator.permissions.query;
 window.navigator.permissions.query = (parameters) =>
     parameters.name === 'notifications'
         ? Promise.resolve({ state: Notification.permission })
         : originalQuery(parameters);
 
-// 8. WebGL vendor / renderer (consistent fingerprint)
+// 8. WebGL vendor / renderer
 try {
     const getParameter = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function(parameter) {
@@ -156,15 +154,7 @@ async def create_browser(
     playwright: Playwright,
     headless: bool = True,
 ) -> Browser:
-    """Launch Chrome browser with anti-detection arguments.
-
-    Args:
-        playwright: Playwright instance.
-        headless: Whether to run in headless mode.
-
-    Returns:
-        Launched Browser instance.
-    """
+    """Launch Chrome browser with anti-detection arguments."""
     browser = await playwright.chromium.launch(
         channel="chrome",
         headless=headless,
@@ -173,18 +163,26 @@ async def create_browser(
     return browser
 
 
+async def create_context(browser: Browser) -> BrowserContext:
+    """Create a new browser context with anti-detection settings."""
+    context = await browser.new_context(
+        user_agent=_USER_AGENT,
+        viewport={"width": 1920, "height": 1080},
+        locale="zh-CN",
+        extra_http_headers=_EXTRA_HEADERS,
+    )
+    await context.add_init_script(_WEBDRIVER_OVERRIDE_SCRIPT)
+    return context
+
+
 async def load_cookies(
     playwright: Playwright,
     cookie_path: Path,
-) -> Optional[BrowserContext]:
-    """Load cookies from a storage_state file into a new browser context.
-
-    Args:
-        playwright: Playwright instance.
-        cookie_path: Path to the storage_state JSON file.
+) -> Optional[tuple[BrowserContext, Browser]]:
+    """Load cookies from a storage_state file.
 
     Returns:
-        BrowserContext with loaded cookies, or None if file doesn't exist.
+        Tuple of (context, browser) or None if file doesn't exist.
     """
     cookie_path = Path(cookie_path)
     if not cookie_path.exists():
@@ -201,27 +199,13 @@ async def load_cookies(
     )
     await context.add_init_script(_WEBDRIVER_OVERRIDE_SCRIPT)
     print(f"[Cookie] 已加载 cookie: {cookie_path}")
-    return context
+    return context, browser
 
 
-async def validate_cookies(
-    page,
-    timeout: int = 15000,
-) -> bool:
-    """Validate cookies by navigating to PDD home and checking for login redirect.
-
-    Args:
-        page: Playwright Page instance.
-        timeout: Navigation timeout in milliseconds.
-
-    Returns:
-        True if cookies are valid (no redirect to login), False otherwise.
-    """
+async def validate_cookies(page: Page, timeout: int = 15000) -> bool:
+    """Validate cookies by checking for login redirect."""
     try:
         await page.goto(_PDD_HOME_URL, wait_until="domcontentloaded", timeout=timeout)
-        # Give the SPA a moment to redirect if cookies are invalid.
-        # Don't wait for networkidle — PDD's SPA keeps making requests
-        # and networkidle may never fire within the timeout.
         await page.wait_for_timeout(3000)
     except Exception as e:
         print(f"[Cookie] 验证导航失败: {e}")
@@ -240,34 +224,17 @@ async def qr_login(
     playwright: Playwright,
     cookie_path: Path,
     timeout: int = 120,
-) -> BrowserContext:
-    """Perform QR code login with a headful browser.
-
-    Opens a visible browser window for the user to scan a QR code.
-    Polls URL changes every 2 seconds to detect successful login.
-
-    Args:
-        playwright: Playwright instance.
-        cookie_path: Path to save the storage_state JSON file.
-        timeout: Maximum wait time in seconds for QR scan.
+) -> tuple[BrowserContext, Browser]:
+    """Perform QR code login.
 
     Returns:
-        BrowserContext after successful login.
-
-    Raises:
-        TimeoutError: If login is not completed within the timeout.
+        Tuple of (context, browser).
     """
     cookie_path = Path(cookie_path)
     cookie_path.parent.mkdir(parents=True, exist_ok=True)
 
     browser = await create_browser(playwright, headless=False)
-    context = await browser.new_context(
-        user_agent=_USER_AGENT,
-        viewport={"width": 1920, "height": 1080},
-        locale="zh-CN",
-        extra_http_headers=_EXTRA_HEADERS,
-    )
-    await context.add_init_script(_WEBDRIVER_OVERRIDE_SCRIPT)
+    context = await create_context(browser)
     page = await context.new_page()
 
     print("=" * 50)
@@ -277,7 +244,7 @@ async def qr_login(
     print("=" * 50)
 
     await page.goto(
-        _PDD_HOME_URL, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT
+        _PDD_HOME_URL, wait_until="domcontentloaded", timeout=config.DEFAULT_TIMEOUT
     )
 
     elapsed = 0
@@ -288,18 +255,16 @@ async def qr_login(
         elapsed += poll_interval
 
         current_url = page.url
-        # Successfully logged in if no longer on login page
         if _PDD_LOGIN_INDICATOR not in current_url and _PDD_HOME_URL in current_url:
             print("[登录] 登录成功！正在保存 cookie...")
             await context.storage_state(path=str(cookie_path))
             print(f"[登录] Cookie 已保存至: {cookie_path}")
-            return context
+            return context, browser
 
         remaining = timeout - elapsed
         if remaining > 0 and remaining % 10 == 0:
             print(f"[登录] 等待扫码中... 剩余 {remaining} 秒")
 
-    # Timeout reached — clean up and raise
     await context.close()
     await browser.close()
     raise TimeoutError(f"[登录] 扫码登录超时（{timeout}秒），请重试")
@@ -307,28 +272,28 @@ async def qr_login(
 
 async def ensure_authenticated(
     playwright: Playwright,
-    cookie_path: Optional[Path] = None,
-) -> BrowserContext:
+    shop_name: Optional[str] = None,
+) -> tuple[BrowserContext, Browser, str]:
     """Main entry point: ensure we have a valid authenticated session.
-
-    Attempts to load existing cookies and validate them.
-    Falls back to QR login if cookies are missing or invalid.
 
     Args:
         playwright: Playwright instance.
-        cookie_path: Path to storage_state file. Defaults to COOKIES_DIR / "pdd_cookies.json".
+        shop_name: Shop name for cookie file naming. If None, will use default.
 
     Returns:
-        Authenticated BrowserContext ready for use.
+        Tuple of (context, browser, shop_name).
     """
-    if cookie_path is None:
-        cookie_path = COOKIES_DIR / "pdd_cookies.json"
-    cookie_path = Path(cookie_path)
+    # If no shop_name provided, use default cookie path
+    if shop_name is None:
+        shop_name = "pdd_shop"
+
+    cookie_path = config.get_cookie_path(shop_name)
 
     # Step 1: Try loading existing cookies
-    context = await load_cookies(playwright, cookie_path)
+    result = await load_cookies(playwright, cookie_path)
 
-    if context is not None:
+    if result is not None:
+        context, browser = result
         # Step 2: Validate loaded cookies
         page = await context.new_page()
         try:
@@ -337,17 +302,15 @@ async def ensure_authenticated(
             await page.close()
 
         if is_valid:
-            print("[Auth] 使用已有 cookie 认证成功")
-            return context
+            print(f"[Auth] 使用已有 cookie 认证成功 (店铺: {shop_name})")
+            return context, browser, shop_name
 
-        # Cookies invalid — close old context and browser
-        browser = context.browser
+        # Cookies invalid — close old context
         await context.close()
-        if browser:
-            await browser.close()
+        await browser.close()
         print("[Auth] Cookie 已失效，切换到扫码登录")
 
     # Step 3: Fall back to QR login
     print("[Auth] 启动扫码登录流程...")
-    context = await qr_login(playwright, cookie_path, timeout=120)
-    return context
+    context, browser = await qr_login(playwright, cookie_path, timeout=120)
+    return context, browser, shop_name

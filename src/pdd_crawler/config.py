@@ -5,9 +5,35 @@ from pathlib import Path
 # Project directories
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 COOKIES_DIR = PROJECT_ROOT / "cookies"
-DOWNLOADS_DIR = PROJECT_ROOT / "downloads"
-OUTPUT_DIR = PROJECT_ROOT / "output"
-COOKIE_PATH = COOKIES_DIR / "pdd_cookies.json"
+
+# Output directory - all outputs (scraped data + downloaded bills) go here
+# Structure: output/{shop_name}/
+OUTPUT_BASE_DIR = PROJECT_ROOT / "output"
+
+
+def get_cookie_path(shop_name: str) -> Path:
+    """Get cookie file path for a specific shop.
+
+    Args:
+        shop_name: Sanitized shop name.
+
+    Returns:
+        Path to the cookie JSON file.
+    """
+    return COOKIES_DIR / f"{shop_name}_cookies.json"
+
+
+def get_shop_output_dir(shop_name: str) -> Path:
+    """Get output directory for a specific shop.
+
+    Args:
+        shop_name: Sanitized shop name.
+
+    Returns:
+        Path to the shop's output directory.
+    """
+    return OUTPUT_BASE_DIR / shop_name
+
 
 # Default configuration
 DEFAULT_TIMEOUT = 30000
