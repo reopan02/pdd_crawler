@@ -6,6 +6,8 @@ import sys
 
 from pdd_crawler.config import COOKIES_DIR, DOWNLOADS_DIR, OUTPUT_DIR, COOKIE_PATH
 from pdd_crawler.cookie_manager import ensure_authenticated
+from pdd_crawler.home_scraper import run_home_scraper
+from pdd_crawler.bill_exporter import export_all_bills
 
 
 async def main() -> None:
@@ -55,13 +57,21 @@ async def main() -> None:
                 # Step 2: Scrape home page if requested
                 if args.scrape_home or args.all:
                     print("Scraping PDD home page...")
-                    print("Home scraping not yet implemented")
+                    page = await context.new_page()
+                    try:
+                        await run_home_scraper(page)
+                    finally:
+                        await page.close()
                     print("✓ Home page scraping completed")
 
                 # Step 3: Export bills if requested
                 if args.export_bills or args.all:
                     print("Exporting bill information...")
-                    print("Bill export not yet implemented")
+                    page = await context.new_page()
+                    try:
+                        await export_all_bills(page, DOWNLOADS_DIR)
+                    finally:
+                        await page.close()
                     print("✓ Bill export completed")
 
             except KeyboardInterrupt:
