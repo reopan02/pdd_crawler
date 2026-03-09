@@ -54,25 +54,23 @@ async def main() -> None:
                     context = await ensure_authenticated(p, COOKIE_PATH)
                     print("✓ Authentication completed")
 
-                # Step 2: Scrape home page if requested
-                if args.scrape_home or args.all:
-                    print("Scraping PDD home page...")
-                    page = await context.new_page()
-                    try:
+                # Use a single page across operations so the cashier can
+                # inherit the mms session context (Referer, cookies, etc.)
+                page = await context.new_page()
+                try:
+                    # Step 2: Scrape home page if requested
+                    if args.scrape_home or args.all:
+                        print("Scraping PDD home page...")
                         await run_home_scraper(page)
-                    finally:
-                        await page.close()
-                    print("✓ Home page scraping completed")
+                        print("✓ Home page scraping completed")
 
-                # Step 3: Export bills if requested
-                if args.export_bills or args.all:
-                    print("Exporting bill information...")
-                    page = await context.new_page()
-                    try:
-                        await export_all_bills(page, DOWNLOADS_DIR)
-                    finally:
-                        await page.close()
-                    print("✓ Bill export completed")
+                    # Step 3: Export bills if requested
+                    if args.export_bills or args.all:
+                        print("Exporting bill information...")
+                        await export_all_bills(context, page, DOWNLOADS_DIR)
+                        print("✓ Bill export completed")
+                finally:
+                    await page.close()
 
             except KeyboardInterrupt:
                 print("\n✗ Operation cancelled by user")

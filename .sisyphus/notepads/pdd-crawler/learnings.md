@@ -95,3 +95,29 @@ a911999 - feat(scaffold): initialize pdd_crawler project structure
 - Uses config constants directly from config.py
 - Compatible with future async implementations for home_scraper and bill_exporter
 
+## Task 3: Cookie Manager Implementation
+
+### Completed Work
+Replaced stub CookieManager class with 5 standalone async functions in cookie_manager.py:
+
+1. **create_browser(playwright, headless=True)** → Launches Chrome with anti-detection args (`--disable-blink-features=AutomationControlled`, etc.), uses `channel="chrome"` for real Chrome
+2. **load_cookies(playwright, cookie_path)** → Loads `storage_state` from JSON file, returns `BrowserContext` or `None` if file missing. Also injects webdriver override init script.
+3. **validate_cookies(page, timeout=15000)** → Navigates to PDD home, checks if URL contains `/login` indicator. Returns bool.
+4. **qr_login(playwright, cookie_path, timeout=120)** → Headful browser, polls URL every 2s for login completion, saves `storage_state`. Raises `TimeoutError` on timeout with cleanup.
+5. **ensure_authenticated(playwright, cookie_path)** → Orchestrates: load_cookies → validate → qr_login fallback. Default cookie path: `COOKIES_DIR / "pdd_cookies.json"`.
+
+### Key Patterns
+- `from __future__ import annotations` for Python 3.8 compat with `Optional[...]`
+- Anti-detection: webdriver override via `context.add_init_script()`
+- Cookie persistence: Playwright's `storage_state` API (load via `browser.new_context(storage_state=...)`, save via `context.storage_state(path=...)`)
+- Chinese console messages for user prompts during QR login flow
+- Module-level constants prefixed with `_` for internal use
+
+### Environment Notes
+- LSP (basedpyright) not installed — `playwright.async_api` import shows as unresolved but is a valid runtime dep
+- Python verification done via `ast.parse()` + `py_compile.compile()` since the venv python.exe has path issues in bash shell
+- Project targets Python >=3.8, so avoid `X | Y` union syntax; use `Optional[X]` instead
+
+### Commit
+547248f - feat(auth): add cookie manager with validation and QR login
+

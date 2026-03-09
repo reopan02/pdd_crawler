@@ -164,7 +164,7 @@ Max Concurrent: 2 (Waves 2 & 3)
 
 ## TODOs
 
-- [ ] 1. Project Scaffolding & Dependencies
+- [x] 1. Project Scaffolding & Dependencies
 
   **What to do**:
   - Create `pyproject.toml` with project metadata and dependencies: `playwright>=1.40`, `pytest>=7.0`
@@ -218,7 +218,7 @@ Max Concurrent: 2 (Waves 2 & 3)
   - Message: `feat(scaffold): initialize pdd_crawler project structure`
   - Files: `pyproject.toml`, `src/pdd_crawler/*`, `.gitignore`, `cookies/.gitkeep`, `downloads/.gitkeep`, `output/.gitkeep`, `tests/__init__.py`
 
-- [ ] 2. Cookie Manager Module
+- [x] 2. Cookie Manager Module
 
   **What to do**:
   - Implement `src/pdd_crawler/cookie_manager.py` with these functions:
@@ -341,7 +341,7 @@ Max Concurrent: 2 (Waves 2 & 3)
   - Message: `feat(auth): add cookie manager with validation and QR login`
   - Files: `src/pdd_crawler/cookie_manager.py`
 
-- [ ] 3. Config & CLI Entry Point
+- [x] 3. Config & CLI Entry Point
 
   **What to do**:
   - Implement `src/pdd_crawler/config.py` with constants:
@@ -437,7 +437,7 @@ Max Concurrent: 2 (Waves 2 & 3)
   - Message: `feat(cli): add config constants and CLI entry point`
   - Files: `src/pdd_crawler/config.py`, `src/pdd_crawler/__main__.py`
 
-- [ ] 4. Home Page Scraper Module
+- [x] 4. Home Page Scraper Module
 
   **What to do**:
   - Implement `src/pdd_crawler/home_scraper.py` with:
@@ -536,7 +536,7 @@ Max Concurrent: 2 (Waves 2 & 3)
   - Message: `feat(scraper): add home page data scraper`
   - Files: `src/pdd_crawler/home_scraper.py`
 
-- [ ] 5. Bill Exporter Module
+- [x] 5. Bill Exporter Module
 
   **What to do**:
   - Implement `src/pdd_crawler/bill_exporter.py` with:
@@ -650,7 +650,7 @@ Max Concurrent: 2 (Waves 2 & 3)
   - Message: `feat(export): add bill exporter with download handling`
   - Files: `src/pdd_crawler/bill_exporter.py`
 
-- [ ] 6. Integration & Smoke Test
+- [x] 6. Integration & Smoke Test
 
   **What to do**:
   - Install Playwright browsers if not already: `playwright install chromium chrome`

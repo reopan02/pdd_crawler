@@ -25,6 +25,20 @@ CASHIER_BILL_4002_URL = (
     "https://cashier.pinduoduo.com/main/bills?tab=4002&__app_code=113"
 )
 
+# Export history pages (where generated bill files are downloaded from)
+CASHIER_EXPORT_HISTORY_4001_URL = (
+    "https://cashier.pinduoduo.com/main/bills/export-history?tab=4001&__app_code=113"
+)
+CASHIER_EXPORT_HISTORY_4002_URL = (
+    "https://cashier.pinduoduo.com/main/bills/export-history?tab=4002&__app_code=113"
+)
+
+# Map bill tab → export history page
+BILL_EXPORT_HISTORY_MAP = {
+    CASHIER_BILL_4001_URL: CASHIER_EXPORT_HISTORY_4001_URL,
+    CASHIER_BILL_4002_URL: CASHIER_EXPORT_HISTORY_4002_URL,
+}
+
 # Timeouts (in milliseconds, except QR_LOGIN_TIMEOUT which is in seconds)
 QR_LOGIN_TIMEOUT = 120  # 2 minutes in seconds
 PAGE_LOAD_TIMEOUT = 30000  # 30 seconds in milliseconds

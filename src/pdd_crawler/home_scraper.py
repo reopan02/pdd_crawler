@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -35,10 +34,18 @@ async def scrape_home(page: Page) -> dict:
     Raises:
         RuntimeError: If the page redirects to the login URL (session expired).
     """
-    await page.goto(config.PDD_HOME_URL, timeout=config.PAGE_LOAD_TIMEOUT)
-    await page.wait_for_load_state("networkidle")
-    # Extra wait for SPA rendering to settle
-    await asyncio.sleep(4)
+    # Use domcontentloaded instead of the default "load" — PDD's React SPA
+    # loads heavy JS bundles that can exceed 30s.  After the DOM is ready we
+    # give the SPA extra time to render its async data widgets.
+    # Do NOT wait for "networkidle" — PDD keeps firing background API requests
+    # which prevents networkidle from ever resolving within the timeout.
+    await page.goto(
+        config.PDD_HOME_URL,
+        wait_until="domcontentloaded",
+        timeout=config.PAGE_LOAD_TIMEOUT,
+    )
+    # Let React hydrate and fetch dashboard data
+    await page.wait_for_timeout(8000)
 
     # Detect login redirect (session expired)
     current_url = page.url
@@ -53,7 +60,12 @@ async def scrape_home(page: Page) -> dict:
     for selector in _DATA_SELECTORS:
         elements = await page.query_selector_all(selector)
         for element in elements:
-            text = (await element.inner_text()).strip()
+            try:
+                # text_content() works on all node types (unlike inner_text
+                # which fails on SVG and non-HTML elements)
+                text = (await element.text_content() or "").strip()
+            except Exception:
+                continue
             if not text:
                 continue
             key = f"item_{idx}"
@@ -61,6 +73,14 @@ async def scrape_home(page: Page) -> dict:
             if text not in seen_texts.values():
                 seen_texts[key] = text
                 idx += 1
+
+    # Fallback: if selector-based extraction found nothing, grab full body text
+    if not seen_texts:
+        try:
+            body_text = await page.inner_text("body")
+            seen_texts["full_page_text"] = body_text.strip()
+        except Exception:
+            seen_texts["error"] = "无法提取页面内容"
 
     return {
         "scraped_at": datetime.now().isoformat(),

@@ -5,5 +5,6 @@
     "ses_32f775839ffe4pP7zBV84PChFe"
   ],
   "plan_name": "pdd-crawler",
-  "agent": "atlas"
+  "agent": "atlas",
+  "worktree_path": "E:\\code\\crawler"
 }

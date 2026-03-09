@@ -23,11 +23,128 @@ _BROWSER_ARGS = [
     "--no-sandbox",
     "--disable-infobars",
     "--disable-dev-shm-usage",
+    "--lang=zh-CN",
+    "--disable-features=IsolateOrigins,site-per-process",
 ]
 
-# Webdriver override script to bypass bot detection
+# User-agent must match Sec-CH-UA version below
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+# Client Hints headers — must match _USER_AGENT
+_EXTRA_HEADERS = {
+    "Sec-CH-UA": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+}
+
+# Comprehensive anti-detection init script
+# PDD checks navigator.webdriver, plugins, languages, chrome object,
+# permissions, WebGL renderer, and other fingerprints.
 _WEBDRIVER_OVERRIDE_SCRIPT = """
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
+// 1. Remove webdriver flag
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+// 2. Chrome object mock — PDD checks for window.chrome existence
+window.chrome = window.chrome || {};
+window.chrome.runtime = window.chrome.runtime || {
+    onMessage: { addListener: function(){}, removeListener: function(){} },
+    sendMessage: function(){},
+    connect: function() {
+        return { onMessage: { addListener: function(){} }, postMessage: function(){} };
+    },
+    PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
+    PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
+};
+window.chrome.loadTimes = window.chrome.loadTimes || function() {
+    return {
+        requestTime: Date.now() / 1000,
+        startLoadTime: Date.now() / 1000,
+        commitLoadTime: Date.now() / 1000,
+        finishDocumentLoadTime: Date.now() / 1000,
+        finishLoadTime: Date.now() / 1000,
+        firstPaintTime: Date.now() / 1000,
+        firstPaintAfterLoadTime: 0,
+        navigationType: 'Other',
+        wasFetchedViaSpdy: false,
+        wasNpnNegotiated: true,
+        npnNegotiatedProtocol: 'h2',
+        wasAlternateProtocolAvailable: false,
+        connectionInfo: 'h2',
+    };
+};
+window.chrome.csi = window.chrome.csi || function() {
+    return { startE: Date.now(), onloadT: Date.now(), pageT: Date.now(), tran: 15 };
+};
+
+// 3. Realistic plugins mock (empty array is a bot signal)
+Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+        const plugins = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer',
+              description: 'Portable Document Format', length: 1,
+              0: { type: 'application/x-google-chrome-pdf', suffixes: 'pdf',
+                   description: 'Portable Document Format' } },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+              description: '', length: 1,
+              0: { type: 'application/pdf', suffixes: 'pdf', description: '' } },
+            { name: 'Native Client', filename: 'internal-nacl-plugin',
+              description: '', length: 2,
+              0: { type: 'application/x-nacl', suffixes: '',
+                   description: 'Native Client Executable' },
+              1: { type: 'application/x-pnacl', suffixes: '',
+                   description: 'Portable Native Client Executable' } },
+        ];
+        plugins.item = (i) => plugins[i];
+        plugins.namedItem = (name) => plugins.find(p => p.name === name);
+        plugins.refresh = () => {};
+        return plugins;
+    }
+});
+
+// 4. Languages
+Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+Object.defineProperty(navigator, 'language', { get: () => 'zh-CN' });
+
+// 5. Hardware fingerprint
+Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+// 6. Remove Playwright / automation markers
+delete window.__playwright;
+delete window.__pw_manual;
+delete window.__PW_inspect;
+
+// 7. Override permissions query to avoid detection
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+
+// 8. WebGL vendor / renderer (consistent fingerprint)
+try {
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(parameter) {
+        if (parameter === 37445) return 'Intel Inc.';
+        if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+        return getParameter.call(this, parameter);
+    };
+} catch(e) {}
+
+// 9. Prevent iframe contentWindow detection
+try {
+    const origGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+    Object.getOwnPropertyDescriptor = function(obj, prop) {
+        if (prop === 'contentWindow') return undefined;
+        return origGetOwnPropertyDescriptor.call(this, obj, prop);
+    };
+} catch(e) {}
 """
 
 # PDD URLs
@@ -75,7 +192,13 @@ async def load_cookies(
         return None
 
     browser = await create_browser(playwright, headless=True)
-    context = await browser.new_context(storage_state=str(cookie_path))
+    context = await browser.new_context(
+        storage_state=str(cookie_path),
+        user_agent=_USER_AGENT,
+        viewport={"width": 1920, "height": 1080},
+        locale="zh-CN",
+        extra_http_headers=_EXTRA_HEADERS,
+    )
     await context.add_init_script(_WEBDRIVER_OVERRIDE_SCRIPT)
     print(f"[Cookie] 已加载 cookie: {cookie_path}")
     return context
@@ -96,7 +219,10 @@ async def validate_cookies(
     """
     try:
         await page.goto(_PDD_HOME_URL, wait_until="domcontentloaded", timeout=timeout)
-        await page.wait_for_load_state("networkidle", timeout=timeout)
+        # Give the SPA a moment to redirect if cookies are invalid.
+        # Don't wait for networkidle — PDD's SPA keeps making requests
+        # and networkidle may never fire within the timeout.
+        await page.wait_for_timeout(3000)
     except Exception as e:
         print(f"[Cookie] 验证导航失败: {e}")
         return False
@@ -135,7 +261,12 @@ async def qr_login(
     cookie_path.parent.mkdir(parents=True, exist_ok=True)
 
     browser = await create_browser(playwright, headless=False)
-    context = await browser.new_context()
+    context = await browser.new_context(
+        user_agent=_USER_AGENT,
+        viewport={"width": 1920, "height": 1080},
+        locale="zh-CN",
+        extra_http_headers=_EXTRA_HEADERS,
+    )
     await context.add_init_script(_WEBDRIVER_OVERRIDE_SCRIPT)
     page = await context.new_page()
 
