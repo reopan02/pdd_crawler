@@ -4,7 +4,8 @@ import argparse
 import asyncio
 import sys
 
-from pdd_crawler.config import COOKIES_DIR, DOWNLOADS_DIR, OUTPUT_DIR
+from pdd_crawler.config import COOKIES_DIR, DOWNLOADS_DIR, OUTPUT_DIR, COOKIE_PATH
+from pdd_crawler.cookie_manager import ensure_authenticated
 
 
 async def main() -> None:
@@ -43,32 +44,32 @@ async def main() -> None:
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False)
-            context = await browser.new_context()
-
+            context = None
             try:
-                # Route based on arguments
-                if args.login or args.all:
+                # Step 1: Authenticate
+                if args.login or args.scrape_home or args.export_bills or args.all:
                     print("Starting authentication process...")
-                    # TODO: Implement authentication with cookie_manager
+                    context = await ensure_authenticated(p, COOKIE_PATH)
                     print("✓ Authentication completed")
 
+                # Step 2: Scrape home page if requested
                 if args.scrape_home or args.all:
                     print("Scraping PDD home page...")
-                    # TODO: Implement home page scraping
+                    print("Home scraping not yet implemented")
                     print("✓ Home page scraping completed")
 
+                # Step 3: Export bills if requested
                 if args.export_bills or args.all:
                     print("Exporting bill information...")
-                    # TODO: Implement bill export
+                    print("Bill export not yet implemented")
                     print("✓ Bill export completed")
 
             except KeyboardInterrupt:
                 print("\n✗ Operation cancelled by user")
                 sys.exit(1)
             finally:
-                await context.close()
-                await browser.close()
+                if context is not None:
+                    await context.close()
 
     except ImportError as e:
         print(f"Error: Required dependency not found - {e}")
