@@ -70,3 +70,44 @@ QR_LOGIN_TIMEOUT = 120  # 2 minutes in seconds
 PAGE_LOAD_TIMEOUT = 30000  # 30 seconds in milliseconds
 DOWNLOAD_TIMEOUT = 60000  # 1 minute in milliseconds
 COOKIE_VALIDATE_TIMEOUT = 15000  # 15 seconds in milliseconds
+
+# Browser configuration for crawl4ai
+BROWSER_CONFIG = {
+    "browser_type": "chromium",
+    "headless": True,
+    "enable_stealth": True,
+    "viewport_width": 1920,
+    "viewport_height": 1080,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "extra_args": [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-infobars",
+        "--disable-dev-shm-usage",
+        "--lang=zh-CN",
+        "--disable-features=IsolateOrigins,site-per-process",
+    ],
+}
+
+# Extra headers for HTTP requests
+EXTRA_HEADERS = {
+    "Sec-CH-UA": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+}
+
+# Blocked text patterns indicating page/login errors
+BLOCKED_TEXTS = ["登录异常", "关闭页面后重试", "访问异常", "验证身份"]
+
+# Sidebar navigation — candidate text labels to click (tried in order)
+SIDEBAR_TEXTS = ["对账中心", "账房", "账单"]
+
+# Navigation retry settings
+NAV_MAX_RETRIES = 3
+NAV_RETRY_BASE_DELAY = 3.0  # seconds, doubles each retry (exponential backoff)
+
+# Debug screenshot directory name (created under output_dir)
+DEBUG_SCREENSHOT_DIR = "debug"
+
+# Enable file downloads
+ACCEPT_DOWNLOADS = True
