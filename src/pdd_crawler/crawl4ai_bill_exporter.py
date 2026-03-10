@@ -277,72 +277,168 @@ async def _navigate_to_bill_tab(
     session_id: str,
     tab_url: str,
 ) -> bool:
-    """Navigate to cashier bill tab using direct Playwright page navigation.
+    """Navigate to cashier bill tab by clicking sidebar entry from mms home."""
+    last_page = None
 
-    Uses page.goto() directly instead of crawler.arun() for the cashier URL
-    to avoid crawl4ai's scraping script injection, which is more easily
-    detected by the cashier domain's anti-bot system.
-    """
-    # Step 1: Navigate to mms home via arun() to establish session context.
-    result_1 = await crawler.arun(
-        url=config.PDD_HOME_URL,
-        config=CrawlerRunConfig(
-            session_id=session_id,
-            delay_before_return_html=2.0,
-        ),
-    )
-    await _human_delay(1.5, 3.0)
-    body_1 = _result_text(result_1)
-    url_1 = await _get_current_url(crawler, session_id)
-    if _is_blocked(body_1, url_1):
-        _log_blocked_reason(body_1, url_1, "mms_home")
-        return False
-
-    # Step 2: Get the underlying Playwright page for direct navigation.
-    page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
-        crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
-    )
-
-    # Strategy 1: Direct page.goto() — avoids crawl4ai script injection.
-    try:
-        await page.goto(tab_url, wait_until="domcontentloaded", timeout=30000)
+    for attempt in range(1, config.NAV_MAX_RETRIES + 1):
         try:
-            await page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass  # networkidle timeout is acceptable (long-polling, etc.)
-        await _human_delay(2.0, 4.0)
+            # Step 1 — Navigate to mms home.
+            result_1 = await crawler.arun(
+                url=config.PDD_HOME_URL,
+                config=CrawlerRunConfig(
+                    session_id=session_id,
+                    delay_before_return_html=2.0,
+                ),
+            )
+            await _human_delay(1.5, 3.0)
+            body_1 = _result_text(result_1)
+            url_1 = await _get_current_url(crawler, session_id)
+            if _is_blocked(body_1, url_1):
+                _log_blocked_reason(body_1, url_1, f"mms_home_attempt_{attempt}")
+                print(f"[账单-导航] 第{attempt}次尝试, Step 1: mms首页疑似触发风控，准备重试")
+                continue
+            print(f"[账单-导航] 第{attempt}次尝试, Step 1: mms首页加载成功")
 
-        current_url = page.url
-        body_text = await page.evaluate("document.body.innerText || ''") or ""
-        if not _is_blocked(body_text, current_url):
+            # Step 2 — Get Playwright page, dismiss popups, wait for sidebar.
+            page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
+                crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
+            )
+            last_page = page
+
+            await _dismiss_popups(page)
+            await _take_debug_screenshot(page, f"mms_home_attempt{attempt}", None)
+
+            sidebar_deadline = asyncio.get_running_loop().time() + 10.0
+            sidebar_ready = False
+            while asyncio.get_running_loop().time() < sidebar_deadline:
+                try:
+                    sidebar_ready = bool(
+                        await page.evaluate(
+                            """(texts) => {
+                                const candidates = Array.from(document.querySelectorAll('button,a,span,div,li'));
+                                for (const el of candidates) {
+                                    const text = (el.innerText || el.textContent || '').trim();
+                                    if (!text) continue;
+                                    if (texts.some((t) => text.includes(t))) {
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }""",
+                            config.SIDEBAR_TEXTS,
+                        )
+                    )
+                except Exception:
+                    sidebar_ready = False
+
+                if sidebar_ready:
+                    break
+                await asyncio.sleep(0.5)
+
+            if not sidebar_ready:
+                print(f"[账单-导航] 第{attempt}次尝试, Step 2: 未找到侧边栏入口，准备重试")
+                continue
+            print(f"[账单-导航] 第{attempt}次尝试, Step 2: 侧边栏已就绪")
+
+            # Step 3 — Click sidebar entry.
+            click_js = _build_click_js([], config.SIDEBAR_TEXTS)
+            click_ok = bool(await page.evaluate(click_js))
+            if not click_ok:
+                print(f"[账单-导航] 第{attempt}次尝试, Step 3: 侧边栏点击失败，准备重试")
+                continue
+            await _human_delay(2.0, 4.0)
+            print(f"[账单-导航] 第{attempt}次尝试, Step 3: 已点击侧边栏入口")
+
+            # Step 4 — Wait for URL change to cashier domain.
+            cashier_deadline = asyncio.get_running_loop().time() + 15.0
+            while asyncio.get_running_loop().time() < cashier_deadline:
+                if "cashier.pinduoduo.com" in (page.url or ""):
+                    break
+                await asyncio.sleep(0.5)
+
+            if "cashier.pinduoduo.com" not in (page.url or ""):
+                print(f"[账单-导航] 第{attempt}次尝试, Step 4: 未跳转到cashier域名，准备重试")
+                continue
+
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            await _human_delay(1.5, 3.0)
+            print(f"[账单-导航] 第{attempt}次尝试, Step 4: 已跳转到cashier页面 URL={page.url}")
+
+            # Step 5 — Handle tab switching.
+            target_tab = ""
+            if "tab=" in tab_url:
+                target_tab = tab_url.split("tab=", 1)[1].split("&", 1)[0].strip()
+
+            current_url = page.url or ""
+            has_target_tab = bool(target_tab) and (f"tab={target_tab}" in current_url)
+            if target_tab and not has_target_tab:
+                tab_click_ok = False
+                try:
+                    tab_click_ok = bool(await page.evaluate(_build_click_js([], [target_tab])))
+                except Exception:
+                    tab_click_ok = False
+
+                if tab_click_ok:
+                    await _human_delay(1.5, 3.0)
+                    current_url = page.url or ""
+                    has_target_tab = f"tab={target_tab}" in current_url
+
+                if not has_target_tab:
+                    try:
+                        await page.evaluate(
+                            """(targetTab) => {
+                                const url = new URL(window.location.href);
+                                if (!url.hostname.includes('cashier.pinduoduo.com')) {
+                                    return false;
+                                }
+                                url.searchParams.set('tab', targetTab);
+                                if (window.location.href !== url.toString()) {
+                                    window.location.href = url.toString();
+                                }
+                                return true;
+                            }""",
+                            target_tab,
+                        )
+                        await _human_delay(1.5, 3.0)
+                    except Exception as e:
+                        print(f"[账单-导航] 第{attempt}次尝试, Step 5: tab切换异常: {e}")
+
+            print(f"[账单-导航] 第{attempt}次尝试, Step 5: tab切换完成 tab={target_tab}")
+
+            # Step 6 — Verify page content.
+            current_url = page.url or ""
+            body_text = await page.evaluate("document.body.innerText || ''") or ""
+            if _is_blocked(body_text, current_url):
+                _log_blocked_reason(body_text, current_url, f"bill_verify_attempt_{attempt}")
+                print(f"[账单-导航] 第{attempt}次尝试, Step 6: 页面疑似风控，准备重试")
+                continue
+
+            url_ok = "cashier.pinduoduo.com" in current_url
+            tab_ok = (not target_tab) or (f"tab={target_tab}" in current_url)
+            if not (url_ok and tab_ok):
+                print(
+                    f"[账单-导航] 第{attempt}次尝试, Step 6: URL校验失败 "
+                    f"url_ok={url_ok}, tab_ok={tab_ok}, current_url={current_url}"
+                )
+                continue
+
+            await _take_debug_screenshot(page, f"bill_success_attempt{attempt}", None)
+            print(f"[账单-导航] ✅ 第{attempt}次尝试成功, 已到达账单页面: {current_url}")
             return True
-        _log_blocked_reason(body_text, current_url, "strategy_1_page_goto")
-    except Exception as e:
-        print(f"[账单] Strategy 1 (page.goto) 异常: {e}")
+        except Exception as e:
+            print(f"[账单-导航] 第{attempt}次尝试异常: {e}")
+        finally:
+            if attempt < config.NAV_MAX_RETRIES:
+                backoff = config.NAV_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"[账单-导航] 第{attempt}次尝试失败，{backoff:.1f}s后重试")
+                await asyncio.sleep(backoff)
 
-    # Strategy 2: Go back to mms home, then JS redirect to cashier.
-    try:
-        await page.goto(
-            config.PDD_HOME_URL, wait_until="networkidle", timeout=30000
-        )
-        await _human_delay(2.0, 3.5)
-
-        await page.evaluate(f'window.location.href = "{tab_url}"')
-        await asyncio.sleep(3.0)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
-        await _human_delay(2.0, 3.5)
-
-        current_url = page.url
-        body_text = await page.evaluate("document.body.innerText || ''") or ""
-        if not _is_blocked(body_text, current_url):
-            return True
-        _log_blocked_reason(body_text, current_url, "strategy_2_js_redirect")
-    except Exception as e:
-        print(f"[账单] Strategy 2 (JS redirect) 异常: {e}")
-
+    if last_page is not None:
+        await _take_debug_screenshot(last_page, "bill_all_retries_failed", None)
+    print(f"[账单-导航] ❌ 导航失败，已重试{config.NAV_MAX_RETRIES}次")
     return False
 
 
