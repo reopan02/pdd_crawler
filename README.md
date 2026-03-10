@@ -1,53 +1,76 @@
-# PDD Crawler (拼多多商家后台爬虫)
+# PDD Crawler - 拼多多商家后台数据采集工具
 
-基于 Playwright 的拼多多商家后台自动化数据采集工具，支持 Cookie 持久化、二维码登录、首页数据抓取和账单导出下载。
+[![Python版本](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![项目版本](https://img.shields.io/badge/版本-0.1.0-green)](https://pypi.org/)
 
-## 功能特性
+## 项目简介
 
-- 🔐 **Cookie 持久化管理** - 自动保存/加载登录状态，支持有效性检测
-- 📱 **二维码登录** - Cookie 失效时自动弹出二维码供用户扫描登录
-- 🏪 **多店铺支持** - Cookie 和输出文件按店铺名称自动命名和分类
-- 📊 **首页数据抓取** - 提取商家后台首页仪表盘数据，保存为 JSON 格式
-- 📁 **账单导出下载** - 自动导出 cashier 账单中心两个 Tab 的账单文件
-- 📦 **自动解压** - 下载的压缩包自动解压为 CSV 并删除原压缩包
-- 🛡️ **反爬虫对抗** - 内置浏览器指纹伪装，绕过 PDD 反爬检测
-- 🖥️ **命令行工具** - 简洁的 CLI 接口，支持按需执行各项操作
+PDD Crawler 是一个用于采集拼多多商家后台数据的 Python 爬虫工具。该工具可以自动化完成以下任务：
 
-## 环境要求
+1. **用户认证** - 通过二维码登录拼多多商家后台，管理 Cookie 会话
+2. **首页数据抓取** - 采集商家后台首页的店铺信息和经营数据
+3. **账单导出** - 导出并下载商家的账单文件（支持 4001 和 4002 两种类型）
 
-- Python 3.8+
-- Google Chrome 浏览器（已安装）
+> **注意**：本工具仅供学习和研究使用，请遵守拼多多的服务条款和相关法律法规。
 
-## 安装
+## 技术栈
 
-### 1. 克隆项目
+- **Python 3.8+** - 编程语言
+- **[crawl4ai](https://crawl4ai.com/)** - 异步 Web 爬虫框架
+- **[Playwright](https://playwright.dev/python/)** - 浏览器自动化工具
+- **pytest** - 测试框架
 
-```bash
-git clone https://github.com/reopan02/pdd_crawler.git
-cd pdd_crawler
+## 项目结构
+
+```
+pdd_crawler/
+├── src/
+│   └── pdd_crawler/
+│       ├── __main__.py           # CLI 入口点
+│       ├── config.py             # 配置和常量
+│       ├── cookie_manager.py     # Cookie 管理与认证
+│       ├── home_scraper.py       # 首页数据抓取
+│       └── crawl4ai_bill_exporter.py  # 账单导出
+├── tests/                        # 测试文件
+├── cookies/                     # Cookie 存储目录
+├── output/                      # 输出数据目录
+├── docs/                        # 示例文档
+├── pyproject.toml               # 项目配置
+└── README.md                    # 项目文档
 ```
 
-### 2. 安装依赖
+## 环境准备
+
+### 1. 安装依赖
 
 ```bash
 pip install -e .
 ```
 
-### 3. 安装浏览器
+或使用 poetry：
 
 ```bash
-playwright install chromium chrome
+poetry install
+```
+
+### 2. 安装 Playwright 浏览器
+
+```bash
+playwright install chromium
 ```
 
 ## 使用方法
 
 ### 命令行接口
 
+PDD Crawler 提供以下命令行选项：
+
 ```bash
-python -m pdd_crawler [选项]
+# 查看帮助
+pdd_crawler --help
 ```
 
-### 可用选项
+#### 可用选项
 
 | 选项 | 说明 |
 |------|------|
@@ -55,248 +78,172 @@ python -m pdd_crawler [选项]
 | `--scrape-home` | 抓取商家后台首页数据 |
 | `--export-bills` | 导出并下载账单文件 |
 | `--all` | 执行完整流程（登录 → 抓取 → 导出） |
-| `--shop-name NAME` | 指定店铺名称（默认自动提取） |
+| `--shop-name` | 指定店铺名称（用于 Cookie 和输出目录命名） |
 
 ### 使用示例
 
-#### 首次运行（完整流程）
+#### 1. 完整流程（登录 + 抓取首页 + 导出账单）
 
 ```bash
-python -m pdd_crawler --all
+pdd_crawler --all
 ```
 
-程序会：
-1. 检查 Cookie 是否有效
-2. 如果 Cookie 无效，弹出浏览器窗口显示二维码供扫描登录
-3. 自动提取店铺名称
-4. 抓取首页数据并保存到 `output/{店铺名称}/home_data_YYYYMMDD_HHMMSS.json`
-5. 导出两个 Tab 的账单文件到 `output/{店铺名称}/` 目录
-6. 如果下载的是 ZIP 文件，自动解压为 CSV 并删除 ZIP
-
-#### 指定店铺名称
+#### 2. 仅登录（刷新 Cookie）
 
 ```bash
-python -m pdd_crawler --all --shop-name "我的店铺"
+pdd_crawler --login
 ```
 
-#### 仅抓取首页数据
+#### 3. 仅抓取首页数据
 
 ```bash
-python -m pdd_crawler --scrape-home
+pdd_crawler --scrape-home
 ```
 
-#### 仅导出账单
+#### 4. 仅导出账单
 
 ```bash
-python -m pdd_crawler --export-bills
+pdd_crawler --export-bills
 ```
 
-#### 重新登录
+#### 5. 指定店铺名称
 
 ```bash
-python -m pdd_crawler --login
+pdd_crawler --all --shop-name "我的店铺"
 ```
 
-## 项目结构
+## 输出说明
+
+### Cookie 存储
+
+登录成功后，Cookie 会保存到 `cookies/{店铺名称}_cookies.json` 文件中。下次运行时可直接使用，无需重新登录。
+
+### 数据输出
+
+所有输出文件保存在 `output/{店铺名称}/` 目录下：
 
 ```
-pdd_crawler/
-├── src/pdd_crawler/
-│   ├── __init__.py          # 包初始化
-│   ├── __main__.py          # CLI 入口点
-│   ├── config.py            # 配置常量和辅助函数
-│   ├── cookie_manager.py    # Cookie 管理（加载/验证/二维码登录）
-│   ├── home_scraper.py      # 首页数据抓取和店铺名称提取
-│   └── bill_exporter.py     # 账单导出、下载、解压
-├── tests/
-│   ├── __init__.py
-│   └── test_smoke.py        # 烟雾测试
-├── cookies/                  # Cookie 存储目录
-│   └── {店铺名称}_cookies.json  # 按店铺命名的登录状态文件
-├── output/                   # 所有输出文件的根目录
-│   └── {店铺名称}/           # 按店铺分类的输出目录
-│       ├── home_data_*.json  # 首页数据
-│       └── bill_*.csv        # 账单文件（已解压）
-├── pyproject.toml           # 项目配置
-└── README.md
+output/{店铺名称}/
+├── home_data_*.json    # 首页抓取的 JSON 数据
+├── bills_4001/         # 4001 类型账单文件
+│   └── *.xlsx         # Excel 格式账单
+└── bills_4002/         # 4002 类型账单文件
+    └── *.xlsx         # Excel 格式账单
 ```
 
-## 文件命名规则
+### 账单类型说明
 
-### Cookie 文件
-
-- **位置**: `cookies/{店铺名称}_cookies.json`
-- **示例**: `cookies/测试店铺_cookies.json`
-- **格式**: Playwright `storage_state` 格式（包含 cookies + localStorage）
-
-### 输出文件
-
-所有输出文件统一保存在 `output/{店铺名称}/` 目录下：
-
-- **首页数据**: `output/{店铺名称}/home_data_YYYYMMDD_HHMMSS.json`
-- **账单文件**: `output/{店铺名称}/bill_*.csv`（自动从 ZIP 解压）
-
-### 示例输出结构
-
-```
-output/
-└── 我的拼多多店铺/
-    ├── home_data_20260309_120000.json
-    ├── bill_4001_20260309_120500.csv
-    └── bill_4002_20260309_121000.csv
-```
-
-## 工作原理
-
-### 1. 认证流程
-
-```
-┌─────────────────┐
-│  加载 Cookie    │ ← cookies/{店铺名称}_cookies.json
-└────────┬────────┘
-         │
-    Cookie 存在？
-         │
-    ┌────┴────┐
-    │ 是      │ 否
-    ▼         ▼
-┌─────────┐  ┌──────────────┐
-│ 验证    │  │ 二维码登录   │
-└────┬────┘  └──────┬───────┘
-     │              │
-  验证通过？     扫码成功
-     │              │
-  ┌──┴──┐          │
-  │是   │否        │
-  ▼     ▼          │
-完成   二维码登录 ◄─┘
-         │
-         ▼
-   保存 Cookie → cookies/{店铺名称}_cookies.json
-```
-
-### 2. 店铺名称提取
-
-程序自动从商家后台首页提取店铺名称，用于：
-- Cookie 文件命名
-- 输出目录命名
-
-如果无法自动提取，会使用时间戳作为默认名称。
-
-### 3. 账单导出流程
-
-```
-mms首页 → 点击"账房"侧边栏 → cashier账单页
-    ↓
-点击"导出账单" → 确认弹窗
-    ↓
-跳转到 export-history 页面
-    ↓
-点击"下载" → 保存文件
-    ↓
-如果 ZIP → 自动解压为 CSV → 删除 ZIP
-```
-
-### 4. 反爬虫策略
-
-程序采用多层反爬虫对抗措施：
-
-- **浏览器伪装**：禁用 `AutomationControlled` 特征
-- **指纹伪造**：覆盖 `navigator.webdriver`、`plugins`、`languages`、Chrome 对象
-- **自然导航**：通过 mms.pinduoduo.com 侧边栏跳转 cashier，避免直接访问触反爬
-- **真实 Chrome**：使用 `channel="chrome"` 调用已安装的 Chrome 浏览器
+| 账单类型 | 说明 |
+|---------|------|
+| 4001 | 资金流水账单 |
+| 4002 | 订单交易账单 |
 
 ## 配置说明
 
-主要配置项位于 `src/pdd_crawler/config.py`：
+### 配置文件
 
-### 超时设置
+主要配置位于 [src/pdd_crawler/config.py](file:///e:/code/crawler/src/pdd_crawler/config.py)：
 
-| 常量 | 默认值 | 说明 |
-|------|--------|------|
-| `QR_LOGIN_TIMEOUT` | 120 秒 | 二维码登录超时时间 |
-| `PAGE_LOAD_TIMEOUT` | 30000 毫秒 | 页面加载超时 |
-| `DOWNLOAD_TIMEOUT` | 60000 毫秒 | 文件下载超时 |
-| `COOKIE_VALIDATE_TIMEOUT` | 15000 毫秒 | Cookie 验证超时 |
+```python
+# 超时配置（毫秒）
+QR_LOGIN_TIMEOUT = 120          # 二维码登录超时（秒）
+PAGE_LOAD_TIMEOUT = 30000       # 页面加载超时
+DOWNLOAD_TIMEOUT = 60000        # 文件下载超时
+COOKIE_VALIDATE_TIMEOUT = 15000 # Cookie 验证超时
 
-### 目录配置
-
-| 函数 | 说明 |
-|------|------|
-| `get_cookie_path(shop_name)` | 获取指定店铺的 Cookie 文件路径 |
-| `get_shop_output_dir(shop_name)` | 获取指定店铺的输出目录 |
-
-## 故障排除
-
-### 问题：二维码登录超时
-
-**原因**: 120 秒内未完成扫码
-
-**解决**: 
-- 确保拼多多商家 APP 已登录
-- 在超时时间内完成扫码
-- 如需更长时间，修改 `config.QR_LOGIN_TIMEOUT`
-
-### 问题：Cookie 验证失败
-
-**原因**: Cookie 过期或被服务器撤销
-
-**解决**:
-```bash
-# 删除旧 Cookie 重新登录
-rm cookies/{店铺名称}_cookies.json
-python -m pdd_crawler --login
+# 浏览器配置
+BROWSER_CONFIG = {
+    "browser_type": "chromium",
+    "headless": True,           # 无头模式
+    "enable_stealth": True,     # 隐身模式
+    "viewport_width": 1920,
+    "viewport_height": 1080,
+    # ...
+}
 ```
 
-### 问题：反爬虫机制触发
+### 反爬虫机制
 
-**现象**: 显示"登录异常，请关闭页面后重试"
+工具内置了以下反检测特性：
 
-**解决**:
-1. 删除 Cookie 重新登录
-2. 确保使用真实 Chrome 浏览器（非 Chromium）
-3. 检查 Chrome 版本是否过旧
+1. **Stealth 模式** - 隐藏自动化特征
+2. **自定义 User-Agent** - 模拟真实浏览器
+3. **反检测脚本** - 移除 `navigator.webdriver` 等自动化标识
+4. **随机延迟** - 避免请求过快被检测
 
-### 问题：未找到导出按钮
+## 常见问题
 
-**原因**: 页面结构变化或加载不完全
+### Q: 登录失败怎么办？
 
-**解决**:
-- 查看调试截图（如有）
-- 增加页面等待时间
-- 手动检查页面元素
+1. 确保网络可以正常访问拼多多商家后台
+2. 尝试删除 `cookies/` 目录下的旧 Cookie 文件后重新登录
+3. 检查是否开启了 VPN 或代理，可能导致 IP 被风控
 
-## 开发
+### Q: 账单导出失败怎么办？
+
+1. 确认 Cookie 是否有效（尝试重新登录）
+2. 检查输出目录是否有写入权限
+3. 某些账单可能需要等待生成，可稍后重试
+
+### Q: 如何查看详细日志？
+
+目前程序会在控制台输出详细进度信息，包括：
+- 认证流程状态
+- 页面抓取进度
+- 文件下载状态
+
+### Q: 支持哪些账单类型？
+
+目前支持两种账单类型：
+- **4001**: 资金流水账单
+- **4002**: 订单交易账单
+
+## 开发指南
 
 ### 运行测试
 
 ```bash
-python -m pytest tests/test_smoke.py -v
+# 运行所有测试
+pytest
+
+# 运行特定测试
+pytest tests/test_cookie_manager.py
+
+# 运行冒烟测试
+pytest tests/test_smoke.py -v
 ```
 
-### 代码风格
+### 代码规范
+
+项目使用以下工具进行代码检查：
 
 ```bash
-# 格式化
-black src/
+# 代码格式化
+black .
 
-# 检查
+# 类型检查
+mypy src/
+
+# 代码风格检查
 flake8 src/
 ```
 
 ## 注意事项
 
-⚠️ **重要提示**
+1. **安全风险**：请妥善保管 Cookie 文件，不要提交到公开仓库
+2. **频率限制**：避免过于频繁地访问拼多多后台，以免触发风控
+3. **数据用途**：请仅将采集的数据用于合法用途
+4. **责任声明**：使用本工具产生的任何问题由使用者自行承担
 
-- 本工具仅供学习和个人使用
-- 请遵守拼多多平台的用户协议和 `robots.txt` 规则
-- 频繁请求可能导致账号被限制
-- 不要将抓取的数据用于商业用途
+## 依赖版本
+
+核心依赖：
+- `crawl4ai >= 0.7.0`
+- `playwright >= 1.40`
+- `pytest >= 7.0`
+
+详细依赖请参阅 [pyproject.toml](file:///e:/code/crawler/pyproject.toml)。
 
 ## 许可证
 
-MIT License
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
+本项目仅供学习交流使用。

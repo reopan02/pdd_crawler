@@ -42,6 +42,11 @@ DEFAULT_HEADLESS = False
 # PDD URLs
 PDD_HOME_URL = "https://mms.pinduoduo.com/home/"
 PDD_LOGIN_URL = "https://mms.pinduoduo.com/login"
+CASHIER_HOME_URL = "https://cashier.pinduoduo.com/"
+
+# MMS proxy URL for cashier — navigating here triggers SSO ticket flow
+# (mms generates auth ticket → redirects to cashier.pinduoduo.com/main/auth?ticket=...)
+MMS_CASHIER_PROXY_URL = "https://mms.pinduoduo.com/cashier/finance/payment-bills"
 
 # Cashier Bill URLs
 CASHIER_BILL_4001_URL = (
@@ -88,6 +93,46 @@ BROWSER_CONFIG = {
         "--disable-features=IsolateOrigins,site-per-process",
     ],
 }
+
+# Anti-bot detection scripts - executed before each page load
+STEALTH_SCRIPTS = [
+    # Remove navigator.webdriver property
+    """() => {
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined,
+            configurable: true
+        });
+    }""",
+    # Mock Chrome runtime
+    """() => {
+        window.chrome = window.chrome || {
+            runtime: {
+                connect: function() {},
+                sendMessage: function() {}
+            }
+        };
+    }""",
+    # Override permissions query
+    """() => {
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+        );
+    }""",
+    # Mock plugins
+    """() => {
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5],
+            configurable: true
+        });
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['zh-CN', 'zh', 'en'],
+            configurable: true
+        });
+    }""",
+]
 
 # Extra headers for HTTP requests
 EXTRA_HEADERS = {

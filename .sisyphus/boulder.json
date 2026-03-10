@@ -1,10 +1,10 @@
 {
-  "active_plan": "E:\\code\\crawler\\.sisyphus\\plans\\pdd-crawler.md",
-  "started_at": "2026-03-09T03:34:15.664Z",
+  "active_plan": "E:\\code\\crawler\\.sisyphus\\plans\\anti-bot-navigation.md",
+  "started_at": "2026-03-10T02:09:56.763Z",
   "session_ids": [
-    "ses_32f775839ffe4pP7zBV84PChFe"
+    "ses_32a8c55eaffe7EsdHwDsJlIcMG"
   ],
-  "plan_name": "pdd-crawler",
+  "plan_name": "anti-bot-navigation",
   "agent": "atlas",
   "worktree_path": "E:\\code\\crawler"
 }

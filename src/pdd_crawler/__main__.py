@@ -3,16 +3,16 @@
 import argparse
 import asyncio
 import sys
+import uuid
 
 from pdd_crawler.config import (
     COOKIES_DIR,
     OUTPUT_BASE_DIR,
-    get_cookie_path,
     get_shop_output_dir,
 )
-from pdd_crawler.cookie_manager import ensure_authenticated
+from pdd_crawler.cookie_manager import ensure_authenticated, create_crawler
 from pdd_crawler.home_scraper import run_home_scraper
-from pdd_crawler.bill_exporter import export_all_bills
+from pdd_crawler.crawl4ai_bill_exporter import export_all_bills
 
 
 async def main() -> None:
@@ -52,60 +52,61 @@ async def main() -> None:
         args.all = True
 
     try:
-        from playwright.async_api import async_playwright
+        # ── Step 1: Authenticate ──
+        # ensure_authenticated validates/refreshes cookies and closes
+        # its browser before returning. We get back a cookie file path
+        # and the real shop name.
+        if args.login or args.scrape_home or args.export_bills or args.all:
+            print("=" * 50)
+            print("开始认证流程...")
+            print("=" * 50)
+            cookie_path, shop_name = await ensure_authenticated(args.shop_name)
+            print(f"✓ 认证完成 (店铺: {shop_name})")
 
-        async with async_playwright() as p:
-            context = None
-            browser = None
-            shop_name = args.shop_name
+            # Prepare shop-specific output directory
+            output_dir = get_shop_output_dir(shop_name)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            print(f"输出目录: {output_dir}")
+        else:
+            return
 
+        # If only --login was requested, we're done
+        if args.login and not (args.scrape_home or args.export_bills or args.all):
+            print("✓ 登录完成，Cookie 已保存")
+            return
+
+        # ── Step 2: Create crawler session for home scraping and/or bill export ──
+        if args.scrape_home or args.export_bills or args.all:
+            session_id = str(uuid.uuid4())
+            crawler = await create_crawler(cookie_path=cookie_path, headless=True, downloads_path=output_dir)
+            
             try:
-                # Step 1: Authenticate
-                if args.login or args.scrape_home or args.export_bills or args.all:
-                    print("=" * 50)
-                    print("开始认证流程...")
-                    print("=" * 50)
-                    context, browser, shop_name = await ensure_authenticated(
-                        p, shop_name
-                    )
-                    print(f"✓ 认证完成 (店铺: {shop_name})")
-
-                    # Get shop-specific output directory
-                    output_dir = get_shop_output_dir(shop_name)
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    print(f"输出目录: {output_dir}")
-
-                # Use a single page across operations
-                page = await context.new_page()
-
-                try:
-                    # Step 2: Scrape home page if requested
-                    if args.scrape_home or args.all:
+                # Step 2a: Home scraping (if requested)
+                if args.scrape_home or args.all:
+                    try:
                         print("\n" + "=" * 50)
                         print("抓取首页数据...")
                         print("=" * 50)
-                        _, home_file = await run_home_scraper(page, output_dir)
+                        _, home_file = await run_home_scraper(crawler, session_id, output_dir)
                         print(f"✓ 首页数据抓取完成: {home_file}")
 
-                    # Step 3: Export bills if requested
-                    if args.export_bills or args.all:
-                        print("\n" + "=" * 50)
-                        print("导出账单...")
-                        print("=" * 50)
-                        downloaded = await export_all_bills(context, page, output_dir)
-                        print(f"✓ 账单导出完成，共 {len(downloaded)} 个文件")
+                    except KeyboardInterrupt:
+                        print("\n✗ 用户取消操作")
+                        sys.exit(1)
 
-                finally:
-                    await page.close()
+                # Step 2b: Bill export (if requested)
+                if args.export_bills or args.all:
+                    print("\n" + "=" * 50)
+                    print("导出账单...")
+                    print("=" * 50)
+                    downloaded = await export_all_bills(crawler, session_id, cookie_path, output_dir)
+                    print(f"✓ 账单导出完成，共 {len(downloaded)} 个文件")
 
             except KeyboardInterrupt:
                 print("\n✗ 用户取消操作")
                 sys.exit(1)
             finally:
-                if context is not None:
-                    await context.close()
-                if browser is not None:
-                    await browser.close()
+                await crawler.close()
 
     except ImportError as e:
         print(f"错误: 缺少依赖 - {e}")

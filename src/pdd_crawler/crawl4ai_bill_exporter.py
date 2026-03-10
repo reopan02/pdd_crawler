@@ -4,7 +4,7 @@ Exports cashier bills for tab 4001/4002, downloads files to the configured
 downloads directory, and auto-extracts ZIP files.
 """
 
-# pyright: reportMissingImports=false, reportMissingTypeStubs=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportUnusedCallResult=false, reportDeprecated=false
+# pyright: reportMissingImports=false, reportMissingTypeStubs=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportUnusedCallResult=false, reportDeprecated=false, reportAttributeAccessIssue=false
 
 from __future__ import annotations
 
@@ -15,25 +15,9 @@ from datetime import datetime
 from pathlib import Path
 
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+from playwright.async_api import Page
 
 from pdd_crawler import config
-
-
-async def _eval_js(crawler: AsyncWebCrawler, session_id: str, js_code: str) -> str:
-    """Evaluate JavaScript on the current session page via the underlying Playwright page."""
-    page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
-        crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
-    )
-    result = await page.evaluate(js_code)
-    return str(result) if result else ""
-
-
-async def _run_js_on_page(crawler: AsyncWebCrawler, session_id: str, js_code: str) -> None:
-    """Execute JS on the current session page (fire-and-forget, no return value needed)."""
-    page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
-        crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
-    )
-    await page.evaluate(js_code)
 
 
 def _extract_and_cleanup(zip_path: Path) -> Path | None:
@@ -76,14 +60,6 @@ def _result_text(result: object) -> str:
         return html
 
     return str(result)
-
-
-async def _get_current_url(crawler: AsyncWebCrawler, session_id: str) -> str:
-    """Get current URL for a crawler session."""
-    try:
-        return await _eval_js(crawler, session_id, "window.location.href")
-    except Exception:
-        return ""
 
 
 def _is_blocked(body: str, url: str) -> bool:
@@ -210,36 +186,61 @@ async def _dismiss_popups(page) -> None:
         pass
 
 
-def _build_click_js(selectors: list[str], texts: list[str]) -> str:
-    joined_selectors = ",".join([f'"{s}"' for s in selectors])
-    joined_texts = ",".join([f'"{t}"' for t in texts])
-    return (
-        "(() => {"
-        f"const sels=[{joined_selectors}];"
-        f"const texts=[{joined_texts}];"
-        "for (const sel of sels) {"
-        "  const el = document.querySelector(sel);"
-        "  if (el && typeof el.click === 'function') {"
-        "    el.scrollIntoView({block:'center'});"
-        "    el.click();"
-        "    return true;"
-        "  }"
-        "}"
-        "const candidates = Array.from(document.querySelectorAll('button,a,span,div'));"
-        "for (const el of candidates) {"
-        "  const text = (el.innerText || el.textContent || '').trim();"
-        "  if (!text) continue;"
-        "  if (texts.some((t) => text.includes(t))) {"
-        "    if (typeof el.click === 'function') {"
-        "      el.scrollIntoView({block:'center'});"
-        "      el.click();"
-        "      return true;"
-        "    }"
-        "  }"
-        "}"
-        "return false;"
-        "})()"
-    )
+async def _pw_click(
+    page: Page,
+    selectors: list[str],
+    texts: list[str],
+    timeout_ms: int = 5000,
+) -> bool:
+    """Click element using Playwright native API.
+
+    Priority:
+        1. Try CSS selector (e.g., #exportBalance-btn)
+        2. Fall back to button:has-text('...') text matching
+
+    Args:
+        page: Playwright Page object
+        selectors: List of CSS selectors to try first
+        texts: List of text patterns to match as fallback
+        timeout_ms: Timeout for waiting for element
+
+    Returns:
+        True if click succeeded, False otherwise
+    """
+    for selector in selectors:
+        try:
+            locator = page.locator(selector)
+            if await locator.count() > 0:
+                await locator.first.scroll_into_view_if_needed()
+                await locator.first.click(timeout=timeout_ms)
+                print(f"[_pw_click] Clicked via selector: {selector}")
+                return True
+        except Exception:
+            continue
+
+    for text in texts:
+        try:
+            button_locator = page.locator(f"button:has-text('{text}')")
+            if await button_locator.count() > 0:
+                await button_locator.first.scroll_into_view_if_needed()
+                await button_locator.first.click(timeout=timeout_ms)
+                print(f"[_pw_click] Clicked button with text: {text}")
+                return True
+        except Exception:
+            continue
+
+        try:
+            link_locator = page.locator(f"a:has-text('{text}')")
+            if await link_locator.count() > 0:
+                await link_locator.first.scroll_into_view_if_needed()
+                await link_locator.first.click(timeout=timeout_ms)
+                print(f"[_pw_click] Clicked link with text: {text}")
+                return True
+        except Exception:
+            continue
+
+    print(f"[_pw_click] Failed to click: selectors={selectors}, texts={texts}")
+    return False
 
 
 async def _wait_for_new_download(
@@ -277,157 +278,94 @@ async def _navigate_to_bill_tab(
     session_id: str,
     tab_url: str,
 ) -> bool:
-    """Navigate to cashier bill tab by clicking sidebar entry from mms home."""
+    """Navigate to cashier bill tab via mms SSO proxy.
+
+    Direct access to cashier.pinduoduo.com triggers "登录异常" because
+    the cashier domain requires its own session established via an SSO
+    ticket from mms.  The correct flow is:
+
+      1. Navigate to mms.pinduoduo.com/cashier/finance/payment-bills
+         (the mms-side proxy page for cashier).
+      2. mms server generates an auth ticket and the page redirects to
+         cashier.pinduoduo.com/main/auth?ticket=<hex> which validates
+         the ticket via /sherlock/api/auth/checkTicketV2 and sets
+         cashier session cookies.
+      3. The page finally lands on cashier with a valid session.
+      4. Once the session is established we can navigate to any cashier
+         tab URL directly.
+    """
     last_page = None
 
     for attempt in range(1, config.NAV_MAX_RETRIES + 1):
         try:
-            # Step 1 — Navigate to mms home.
-            result_1 = await crawler.arun(
-                url=config.PDD_HOME_URL,
-                config=CrawlerRunConfig(
-                    session_id=session_id,
-                    delay_before_return_html=2.0,
-                ),
-            )
-            await _human_delay(1.5, 3.0)
-            body_1 = _result_text(result_1)
-            url_1 = await _get_current_url(crawler, session_id)
-            if _is_blocked(body_1, url_1):
-                _log_blocked_reason(body_1, url_1, f"mms_home_attempt_{attempt}")
-                print(f"[账单-导航] 第{attempt}次尝试, Step 1: mms首页疑似触发风控，准备重试")
-                continue
-            print(f"[账单-导航] 第{attempt}次尝试, Step 1: mms首页加载成功")
-
-            # Step 2 — Get Playwright page, dismiss popups, wait for sidebar.
-            page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
+            page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(  # type: ignore[union-attr]
                 crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
             )
             last_page = page
 
-            await _dismiss_popups(page)
-            await _take_debug_screenshot(page, f"mms_home_attempt{attempt}", None)
+            # ── Step 1: Navigate through mms proxy to establish cashier session via SSO ticket ──
+            print(f"[账单-导航] 第{attempt}次尝试, Step 1: 通过mms代理页建立cashier会话 (SSO)")
+            try:
+                await page.goto(
+                    config.MMS_CASHIER_PROXY_URL,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+            except Exception as e:
+                print(f"[账单-导航] 第{attempt}次尝试, Step 1访问mms代理页失败: {e}")
 
-            sidebar_deadline = asyncio.get_running_loop().time() + 10.0
-            sidebar_ready = False
-            while asyncio.get_running_loop().time() < sidebar_deadline:
-                try:
-                    sidebar_ready = bool(
-                        await page.evaluate(
-                            """(texts) => {
-                                const candidates = Array.from(document.querySelectorAll('button,a,span,div,li'));
-                                for (const el of candidates) {
-                                    const text = (el.innerText || el.textContent || '').trim();
-                                    if (!text) continue;
-                                    if (texts.some((t) => text.includes(t))) {
-                                        return true;
-                                    }
-                                }
-                                return false;
-                            }""",
-                            config.SIDEBAR_TEXTS,
-                        )
-                    )
-                except Exception:
-                    sidebar_ready = False
-
-                if sidebar_ready:
-                    break
-                await asyncio.sleep(0.5)
-
-            if not sidebar_ready:
-                print(f"[账单-导航] 第{attempt}次尝试, Step 2: 未找到侧边栏入口，准备重试")
-                continue
-            print(f"[账单-导航] 第{attempt}次尝试, Step 2: 侧边栏已就绪")
-
-            # Step 3 — Click sidebar entry.
-            click_js = _build_click_js([], config.SIDEBAR_TEXTS)
-            click_ok = bool(await page.evaluate(click_js))
-            if not click_ok:
-                print(f"[账单-导航] 第{attempt}次尝试, Step 3: 侧边栏点击失败，准备重试")
-                continue
-            await _human_delay(2.0, 4.0)
-            print(f"[账单-导航] 第{attempt}次尝试, Step 3: 已点击侧边栏入口")
-
-            # Step 4 — Wait for URL change to cashier domain.
-            cashier_deadline = asyncio.get_running_loop().time() + 15.0
-            while asyncio.get_running_loop().time() < cashier_deadline:
-                if "cashier.pinduoduo.com" in (page.url or ""):
-                    break
-                await asyncio.sleep(0.5)
-
-            if "cashier.pinduoduo.com" not in (page.url or ""):
-                print(f"[账单-导航] 第{attempt}次尝试, Step 4: 未跳转到cashier域名，准备重试")
-                continue
+            await _human_delay(3.0, 5.0)
 
             try:
-                await page.wait_for_load_state("networkidle", timeout=10000)
+                await page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:
                 pass
-            await _human_delay(1.5, 3.0)
-            print(f"[账单-导航] 第{attempt}次尝试, Step 4: 已跳转到cashier页面 URL={page.url}")
 
-            # Step 5 — Handle tab switching.
-            target_tab = ""
-            if "tab=" in tab_url:
-                target_tab = tab_url.split("tab=", 1)[1].split("&", 1)[0].strip()
+            sso_url = page.url or ""
+            if "cashier.pinduoduo.com" not in sso_url:
+                print(f"[账单-导航] 第{attempt}次尝试, Step 1: SSO重定向未到达cashier: {sso_url}")
+                continue
+            print(f"[账单-导航] 第{attempt}次尝试, Step 1: SSO完成, 已到达cashier: {sso_url}")
 
-            current_url = page.url or ""
-            has_target_tab = bool(target_tab) and (f"tab={target_tab}" in current_url)
-            if target_tab and not has_target_tab:
-                tab_click_ok = False
+            await _dismiss_popups(page)
+            await _take_debug_screenshot(page, f"cashier_sso_attempt{attempt}", None)
+
+            # ── Step 2: Navigate to the specific bill tab ──
+            # If we already landed on the target tab, skip the extra navigation.
+            if tab_url in sso_url:
+                print(f"[账单-导航] 第{attempt}次尝试, Step 2: SSO已直接到达目标页面")
+            else:
+                print(f"[账单-导航] 第{attempt}次尝试, Step 2: 导航到目标账单页")
+                await _human_delay(1.0, 2.0)
                 try:
-                    tab_click_ok = bool(await page.evaluate(_build_click_js([], [target_tab])))
+                    await page.goto(tab_url, wait_until="domcontentloaded", timeout=30000)
+                except Exception as e:
+                    print(f"[账单-导航] 第{attempt}次尝试, Step 2导航失败: {e}")
+
+                await _human_delay(2.0, 4.0)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
                 except Exception:
-                    tab_click_ok = False
+                    pass
 
-                if tab_click_ok:
-                    await _human_delay(1.5, 3.0)
-                    current_url = page.url or ""
-                    has_target_tab = f"tab={target_tab}" in current_url
-
-                if not has_target_tab:
-                    try:
-                        await page.evaluate(
-                            """(targetTab) => {
-                                const url = new URL(window.location.href);
-                                if (!url.hostname.includes('cashier.pinduoduo.com')) {
-                                    return false;
-                                }
-                                url.searchParams.set('tab', targetTab);
-                                if (window.location.href !== url.toString()) {
-                                    window.location.href = url.toString();
-                                }
-                                return true;
-                            }""",
-                            target_tab,
-                        )
-                        await _human_delay(1.5, 3.0)
-                    except Exception as e:
-                        print(f"[账单-导航] 第{attempt}次尝试, Step 5: tab切换异常: {e}")
-
-            print(f"[账单-导航] 第{attempt}次尝试, Step 5: tab切换完成 tab={target_tab}")
-
-            # Step 6 — Verify page content.
-            current_url = page.url or ""
-            body_text = await page.evaluate("document.body.innerText || ''") or ""
-            if _is_blocked(body_text, current_url):
-                _log_blocked_reason(body_text, current_url, f"bill_verify_attempt_{attempt}")
-                print(f"[账单-导航] 第{attempt}次尝试, Step 6: 页面疑似风控，准备重试")
+            final_url = page.url or ""
+            if "cashier.pinduoduo.com" not in final_url:
+                print(f"[账单-导航] 第{attempt}次尝试, Step 2: 未能停留在cashier域名: {final_url}")
                 continue
 
-            url_ok = "cashier.pinduoduo.com" in current_url
-            tab_ok = (not target_tab) or (f"tab={target_tab}" in current_url)
-            if not (url_ok and tab_ok):
-                print(
-                    f"[账单-导航] 第{attempt}次尝试, Step 6: URL校验失败 "
-                    f"url_ok={url_ok}, tab_ok={tab_ok}, current_url={current_url}"
-                )
+            # ── Step 3: Verify no anti-bot block ──
+            print(f"[账单-导航] 第{attempt}次尝试, Step 3: 验证页面正常: {final_url}")
+
+            body_text = await page.evaluate("document.body.innerText || ''") or ""
+            if _is_blocked(body_text, final_url):
+                _log_blocked_reason(body_text, final_url, f"bill_verify_attempt_{attempt}")
+                print(f"[账单-导航] 第{attempt}次尝试, Step 3: 页面疑似风控，准备重试")
                 continue
 
             await _take_debug_screenshot(page, f"bill_success_attempt{attempt}", None)
-            print(f"[账单-导航] ✅ 第{attempt}次尝试成功, 已到达账单页面: {current_url}")
+            print(f"[账单-导航] ✅ 第{attempt}次尝试成功, 已到达账单页面: {final_url}")
             return True
+
         except Exception as e:
             print(f"[账单-导航] 第{attempt}次尝试异常: {e}")
         finally:
@@ -448,7 +386,14 @@ async def export_single_bill(
     tab_url: str,
     output_dir: Path,
 ) -> Path | None:
-    """Export a single tab bill and return downloaded/extracted file path."""
+    """Export a single tab bill and return downloaded/extracted file path.
+    
+    Flow:
+    1. Navigate to bill tab via SSO proxy
+    2. Click export button → new tab opens automatically to export history page
+    3. In new tab, click download button (#downloadBalance-btn-0)
+    4. Wait for file download and extract if ZIP
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     ok = await _navigate_to_bill_tab(crawler, session_id, tab_url)
@@ -456,96 +401,131 @@ async def export_single_bill(
         print(f"⚠️ 反爬机制触发，跳过: {tab_url}")
         return None
 
-    # Get Playwright page for subsequent operations
-    page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
+    # Get Playwright page and context for subsequent operations
+    browser_manager = crawler.crawler_strategy.browser_manager  # type: ignore[union-attr]
+    page, context = await browser_manager.get_page(
         crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
     )
 
-    # 1) Click export button
+    # 1) Click export button - this opens a new tab automatically
     export_selectors = [
+        "#exportBalance-btn",
         'button[class*="export"]',
         '[class*="export"] button',
     ]
-    click_js = _build_click_js(export_selectors, ["导出账单", "导出"])
-    await _run_js_on_page(crawler, session_id, click_js)
-    await asyncio.sleep(1.5)
-    await _human_delay(1.5, 3.0)
-    current_url = await _get_current_url(crawler, session_id)
-    body_text = await _eval_js(crawler, session_id, "document.body.innerText || ''")
-    if _is_blocked(body_text, current_url):
-        print(f"⚠️ 页面被拦截，跳过: {tab_url}")
-        return None
-
-    # 2) Click confirm button in modal
-    confirm_selectors = ['[class*="modal"] button[class*="primary"]']
-    confirm_js = _build_click_js(confirm_selectors, ["确认导出", "确认", "确定"])
-    await _run_js_on_page(crawler, session_id, confirm_js)
-    await asyncio.sleep(1.5)
-    await _human_delay(2.0, 4.0)
-    current_url = await _get_current_url(crawler, session_id)
-    body_text = await _eval_js(crawler, session_id, "document.body.innerText || ''")
-    if _is_blocked(body_text, current_url):
-        print(f"⚠️ 页面被拦截，跳过: {tab_url}")
-        return None
-
-    # Block check after triggering export
-    await asyncio.sleep(1.0)
-    current_url = await _get_current_url(crawler, session_id)
-    body_text = await _eval_js(crawler, session_id, "document.body.innerText || ''")
-    if _is_blocked(body_text, current_url):
-        print(f"⚠️ 页面被拦截，跳过: {tab_url}")
-        return None
-
-    # 3) Go to export history — use page.goto() to avoid crawl4ai injection
-    export_history_url = config.BILL_EXPORT_HISTORY_MAP.get(tab_url)
-    if not export_history_url:
-        tab_part = tab_url.split("tab=")[1].split("&")[0] if "tab=" in tab_url else "4001"
-        export_history_url = (
-            "https://cashier.pinduoduo.com/main/bills/export-history"
-            f"?tab={tab_part}&__app_code=113"
-        )
-
+    
+    # Use Playwright's wait_for_event to capture new page (tab)
+    # Start waiting for the 'page' event BEFORE clicking the button
     try:
-        await page.goto(export_history_url, wait_until="domcontentloaded", timeout=30000)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
+        async with context.expect_page(timeout=15000) as page_info:
+            clicked = await _pw_click(page, export_selectors, ["导出账单", "导出"])
+            if not clicked:
+                print("[账单] 未找到导出按钮")
+                return None
+            print("[账单] 已点击导出按钮，等待新标签页打开...")
+        
+        new_page = await page_info.value
+        print(f"[账单] 新标签页已打开: {new_page.url}")
+        
     except Exception as e:
-        print(f"⚠️ 导出记录页导航异常: {e}")
+        print(f"[账单] 等待新标签页失败: {e}")
         return None
-    await _human_delay(2.0, 4.0)
-    current_url = page.url
-    history_body = await page.evaluate("document.body.innerText || ''") or ""
+    
+    # Wait for the new page to load
+    try:
+        await new_page.wait_for_load_state("domcontentloaded", timeout=15000)
+    except Exception:
+        pass
+    await _human_delay(1.0, 2.0)
+    
+    # Verify we're on the export history page
+    current_url = new_page.url or ""
+    if "export-history" not in current_url:
+        print(f"[账单] 新页面不是导出历史页: {current_url}")
+        # If not on export history, try navigating directly
+        export_history_url = config.BILL_EXPORT_HISTORY_MAP.get(tab_url)
+        if not export_history_url:
+            tab_part = tab_url.split("tab=")[1].split("&")[0] if "tab=" in tab_url else "4001"
+            export_history_url = (
+                "https://cashier.pinduoduo.com/main/bills/export-history"
+                f"?tab={tab_part}&__app_code=113"
+            )
+        try:
+            await new_page.goto(export_history_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            print(f"[账单] 导航到导出历史页失败: {e}")
+            return None
+    
+    # Check for anti-bot blocking
+    history_body = await new_page.evaluate("document.body.innerText || ''") or ""
     if _is_blocked(history_body, current_url):
         _log_blocked_reason(history_body, current_url, "export_history")
         print(f"⚠️ 导出记录页被拦截，跳过: {tab_url}")
         return None
-
-    # 4) Click download and wait for file in downloads_path
-    before_files = set(output_dir.iterdir()) if output_dir.exists() else set()
+    
+    await _take_debug_screenshot(new_page, "export_history_page", output_dir)
+    
+    # 2) Click download button in new tab (#downloadBalance-btn-0)
+    # Use Playwright's expect_download for reliable download handling
+    print("[账单] 寻找下载按钮...")
+    
+    # Try specific download button ID first, then fallback to other selectors
     download_selectors = [
-        '[href*="download"]',
-        'a[download]',
+        "#downloadBalance-btn-0",
+        "[id^='downloadBalance-btn']",
+        'button:has-text("下载账单")',
+        'button:has-text("下载")',
+        "[href*=\"download\"]",
+        "a[download]",
         'button[class*="download"]',
     ]
-    download_js = _build_click_js(download_selectors, ["下载"])
-    await _run_js_on_page(crawler, session_id, download_js)
-    await asyncio.sleep(1.0)
-    current_url = await _get_current_url(crawler, session_id)
-    body_text = await _eval_js(crawler, session_id, "document.body.innerText || ''")
-    if _is_blocked(body_text, current_url):
-        print(f"⚠️ 下载步骤被拦截，跳过: {tab_url}")
-        return None
-
-    downloaded_file = await _wait_for_new_download(
-        output_dir=output_dir,
-        before=before_files,
-        timeout_s=max(10, config.DOWNLOAD_TIMEOUT // 1000),
-    )
-    if downloaded_file is None:
-        print("[账单] 下载超时")
-        return None
+    
+    # Wait for download event when clicking the button
+    try:
+        async with new_page.expect_download(timeout=60000) as download_info:
+            clicked_download = await _pw_click(new_page, download_selectors, ["下载账单", "下载"])
+            
+            if not clicked_download:
+                print("[账单] 未找到下载按钮，尝试等待页面加载...")
+                await _human_delay(2.0, 3.0)
+                clicked_download = await _pw_click(new_page, download_selectors, ["下载账单", "下载"])
+            
+            if not clicked_download:
+                print("[账单] 下载按钮未找到")
+                return None
+            
+            print("[账单] 已点击下载按钮，等待下载完成...")
+        
+        download = await download_info.value
+        suggested_name = download.suggested_filename
+        print(f"[账单] 下载文件名: {suggested_name}")
+        
+        # Save to output directory
+        download_path = output_dir / suggested_name
+        await download.save_as(download_path)
+        downloaded_file = download_path
+        
+    except Exception as e:
+        print(f"[账单] 下载事件捕获失败，尝试轮询方式: {e}")
+        # Fallback to polling method
+        before_files = set(output_dir.iterdir()) if output_dir.exists() else set()
+        
+        clicked_download = await _pw_click(new_page, download_selectors, ["下载账单", "下载"])
+        if not clicked_download:
+            print("[账单] 下载按钮未找到")
+            return None
+        
+        print("[账单] 已点击下载按钮，等待文件出现...")
+        
+        downloaded_file = await _wait_for_new_download(
+            output_dir=output_dir,
+            before=before_files,
+            timeout_s=max(10, config.DOWNLOAD_TIMEOUT // 1000),
+        )
+        
+        if downloaded_file is None:
+            print("[账单] 下载超时")
+            return None
 
     print(f"✅ 账单已下载: {downloaded_file}")
     if downloaded_file.suffix.lower() == ".zip":

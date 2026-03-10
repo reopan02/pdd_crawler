@@ -1,5 +1,7 @@
 """Home page scraper — extracts dashboard metrics and shop name from PDD home page."""
 
+# pyright: reportMissingImports=false, reportMissingTypeStubs=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportUnusedCallResult=false, reportDeprecated=false
+
 from __future__ import annotations
 
 import json
@@ -7,9 +9,22 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from playwright.async_api import Page
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 
 from pdd_crawler import config
+
+
+async def _eval_js(crawler: AsyncWebCrawler, session_id: str, js_code: str) -> str:
+    """Evaluate JavaScript on the current session page via the underlying Playwright page.
+
+    crawl4ai's arun() rejects non-http URLs, so for JS-only operations on the
+    current page we go through the browser_manager directly.
+    """
+    page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
+        crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
+    )
+    result = await page.evaluate(js_code)
+    return str(result) if result else ""
 
 
 # CSS selectors that commonly hold dashboard data on PDD
@@ -41,18 +56,10 @@ def _sanitize_name(name: str) -> str:
     return name
 
 
-async def get_shop_name(page: Page) -> str:
-    """Extract shop name from PDD home page.
-
-    Tries multiple selectors to find the shop name display.
-    Falls back to a timestamp-based name if not found.
-    """
-    # Wait a bit for the page to fully render
-    await page.wait_for_timeout(2000)
-
-    # Try various selectors for shop name
-    shop_name_selectors = [
-        # Common shop name class patterns
+# JavaScript to extract shop name by trying multiple selectors
+_SHOP_NAME_JS = """
+(function() {
+    var selectors = [
         '[class*="shopName"]',
         '[class*="shop-name"]',
         '[class*="ShopName"]',
@@ -60,30 +67,96 @@ async def get_shop_name(page: Page) -> str:
         '[class*="mall-name"]',
         '[class*="storeName"]',
         '[class*="store-name"]',
-        # Header/brand area
         'header [class*="name"]',
         '[class*="header"] [class*="name"]',
-        # Try finding text that looks like a shop name
         '[class*="user"] [class*="name"]',
-        '[class*="merchant"] [class*="name"]',
-    ]
+        '[class*="merchant"] [class*="name"]'
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+        try {
+            var el = document.querySelector(selectors[i]);
+            if (el) {
+                var text = (el.textContent || '').trim();
+                if (text.length > 1 && text.length < 100) {
+                    return text;
+                }
+            }
+        } catch(e) {}
+    }
+    // Fallback: try page title
+    var title = document.title || '';
+    if (title.indexOf(' - ') !== -1) {
+        var name = title.split(' - ')[0].trim();
+        if (name && name !== '拼多多商家后台') {
+            return name;
+        }
+    }
+    return '';
+})();
+"""
 
-    for selector in shop_name_selectors:
-        try:
-            element = page.locator(selector).first
-            if await element.is_visible(timeout=2000):
-                text = (await element.text_content() or "").strip()
-                if text and len(text) > 1 and len(text) < 100:
-                    print(f"[首页] 找到店铺名称: {text}")
-                    return _sanitize_name(text)
-        except Exception:
-            continue
+# JavaScript to extract dashboard data using _DATA_SELECTORS
+_EXTRACT_DATA_JS = """
+(function() {
+    var selectors = %s;
+    var seenTexts = {};
+    var idx = 0;
+    var seenValues = {};
+    for (var s = 0; s < selectors.length; s++) {
+        try {
+            var elements = document.querySelectorAll(selectors[s]);
+            for (var e = 0; e < elements.length; e++) {
+                try {
+                    var text = (elements[e].textContent || '').trim();
+                    if (!text) continue;
+                    if (seenValues[text]) continue;
+                    seenValues[text] = true;
+                    seenTexts['item_' + idx] = text;
+                    idx++;
+                } catch(ex) {}
+            }
+        } catch(ex) {}
+    }
+    if (idx === 0) {
+        try {
+            var body = document.body.innerText || '';
+            seenTexts['full_page_text'] = body.trim();
+        } catch(ex) {
+            seenTexts['error'] = '无法提取页面内容';
+        }
+    }
+    return JSON.stringify(seenTexts);
+})();
+""" % json.dumps(_DATA_SELECTORS)
 
-    # Try to get from page title
+
+async def get_shop_name(crawler: AsyncWebCrawler, session_id: str) -> str:
+    """Extract shop name from PDD home page.
+
+    Tries multiple selectors to find the shop name display.
+    Falls back to a timestamp-based name if not found.
+
+    Args:
+        crawler: An active crawl4ai crawler instance.
+        session_id: Session identifier for the crawler.
+
+    Returns:
+        Sanitized shop name string.
+    """
     try:
-        title = await page.title()
-        # PDD titles often contain shop name: "店铺名称 - 拼多多商家后台"
-        if " - " in title:
+        text = await _eval_js(crawler, session_id, _SHOP_NAME_JS)
+        text = text.strip().strip('"').strip("'")
+        if text and len(text) > 1 and len(text) < 100:
+            print(f"[首页] 找到店铺名称: {text}")
+            return _sanitize_name(text)
+    except Exception:
+        pass
+
+    # Fallback: try getting page title via JS
+    try:
+        title = await _eval_js(crawler, session_id, "document.title")
+        title = title.strip().strip('"').strip("'")
+        if title and " - " in title:
             name = title.split(" - ")[0].strip()
             if name and name != "拼多多商家后台":
                 print(f"[首页] 从标题提取店铺名称: {name}")
@@ -97,11 +170,12 @@ async def get_shop_name(page: Page) -> str:
     return fallback_name
 
 
-async def scrape_home(page: Page) -> dict:
+async def scrape_home(crawler: AsyncWebCrawler, session_id: str) -> dict[str, object]:
     """Navigate to PDD home and extract all visible dashboard metrics.
 
     Args:
-        page: An authenticated Playwright page instance.
+        crawler: An active crawl4ai crawler instance.
+        session_id: Session identifier for the crawler.
 
     Returns:
         A dict containing scraped_at, url, page_title, shop_name, and data.
@@ -109,43 +183,46 @@ async def scrape_home(page: Page) -> dict:
     Raises:
         RuntimeError: If the page redirects to the login URL (session expired).
     """
-    await page.goto(
-        config.PDD_HOME_URL,
-        wait_until="domcontentloaded",
-        timeout=config.PAGE_LOAD_TIMEOUT,
+    # Navigate to home page
+    result = await crawler.arun(
+        url=config.PDD_HOME_URL,
+        config=CrawlerRunConfig(
+            session_id=session_id,
+            wait_for="body",
+        ),
     )
-    await page.wait_for_timeout(8000)
 
-    current_url = page.url
+    # Check current URL for login redirect
+    current_url = await _eval_js(crawler, session_id, "window.location.href")
+    current_url = current_url.strip().strip('"').strip("'")
+    if not current_url:
+        current_url = getattr(result, "url", config.PDD_HOME_URL)
+
     if "/login" in current_url:
         raise RuntimeError(f"会话已过期，页面跳转到登录页: {current_url}")
 
-    page_title = await page.title()
-    shop_name = await get_shop_name(page)
+    # Get page title
+    page_title = await _eval_js(crawler, session_id, "document.title")
+    page_title = page_title.strip().strip('"').strip("'")
 
-    # Collect unique elements matching any data-related selector
+    # Get shop name
+    shop_name = await get_shop_name(crawler, session_id)
+
+    # Extract dashboard data via JS
+    data_raw = await _eval_js(crawler, session_id, _EXTRACT_DATA_JS)
     seen_texts: dict[str, str] = {}
-    idx = 0
-    for selector in _DATA_SELECTORS:
-        elements = await page.query_selector_all(selector)
-        for element in elements:
-            try:
-                text = (await element.text_content() or "").strip()
-            except Exception:
-                continue
-            if not text:
-                continue
-            key = f"item_{idx}"
-            if text not in seen_texts.values():
-                seen_texts[key] = text
-                idx += 1
-
-    # Fallback: if selector-based extraction found nothing
-    if not seen_texts:
+    if data_raw.strip():
         try:
-            body_text = await page.inner_text("body")
+            seen_texts = json.loads(data_raw.strip())
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Fallback if nothing extracted
+    if not seen_texts:
+        body_text = await _eval_js(crawler, session_id, "document.body.innerText || ''")
+        if body_text.strip():
             seen_texts["full_page_text"] = body_text.strip()
-        except Exception:
+        else:
             seen_texts["error"] = "无法提取页面内容"
 
     return {
@@ -157,7 +234,7 @@ async def scrape_home(page: Page) -> dict:
     }
 
 
-async def save_home_data(data: dict, output_dir: Path) -> Path:
+async def save_home_data(data: dict[str, object], output_dir: Path) -> Path:
     """Persist scraped home data as pretty-printed JSON.
 
     Args:
@@ -179,22 +256,22 @@ async def save_home_data(data: dict, output_dir: Path) -> Path:
 
 
 async def run_home_scraper(
-    page: Page, output_dir: Path | None = None
+    crawler: AsyncWebCrawler, session_id: str, output_dir: Path | None = None
 ) -> tuple[str, Path]:
     """Orchestrate home page scraping: scrape → save.
 
     Args:
-        page: An authenticated Playwright page instance.
+        crawler: An active crawl4ai crawler instance.
+        session_id: Session identifier for the crawler.
         output_dir: Directory to save output. If None, uses shop_name-based dir.
 
     Returns:
         Tuple of (shop_name, output_file_path).
     """
-    data = await scrape_home(page)
-    shop_name = data.get("shop_name", "pdd_shop")
+    data = await scrape_home(crawler, session_id)
+    shop_name = str(data.get("shop_name", "pdd_shop"))
 
-    if output_dir is None:
-        output_dir = config.OUTPUT_BASE_DIR / shop_name
+    resolved_dir: Path = output_dir if output_dir is not None else config.OUTPUT_BASE_DIR / shop_name
 
-    filepath = await save_home_data(data, output_dir)
+    filepath = await save_home_data(data, resolved_dir)
     return shop_name, filepath
