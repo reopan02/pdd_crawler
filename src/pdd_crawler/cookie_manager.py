@@ -17,6 +17,25 @@ _PDD_HOME_URL = "https://mms.pinduoduo.com"
 _PDD_LOGIN_INDICATOR = "/login"
 
 
+def list_all_cookies() -> list[tuple[Path, str]]:
+    """Return all cookie files with their shop names.
+
+    Returns:
+        List of (cookie_path, shop_name) tuples, sorted by filename.
+    """
+    cookies_dir = config.COOKIES_DIR
+    if not cookies_dir.exists():
+        return []
+
+    results: list[tuple[Path, str]] = []
+    for p in sorted(cookies_dir.glob("*_cookies.json")):
+        # Extract shop name from filename: {shop_name}_cookies.json
+        shop_name = p.stem.removesuffix("_cookies")
+        if shop_name:
+            results.append((p, shop_name))
+    return results
+
+
 def get_browser_config(
     headless: bool = True,
     cookie_path: Path | None = None,
