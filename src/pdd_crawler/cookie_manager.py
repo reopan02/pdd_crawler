@@ -12,7 +12,6 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 from pdd_crawler import config
 from pdd_crawler.home_scraper import get_shop_name
 
-
 _PDD_HOME_URL = "https://mms.pinduoduo.com"
 _PDD_LOGIN_INDICATOR = "/login"
 
@@ -67,7 +66,9 @@ async def create_crawler(
     downloads_path: Path | None = None,
 ) -> AsyncWebCrawler:
     """Create and start a configured crawl4ai crawler."""
-    crawler = AsyncWebCrawler(config=get_browser_config(headless, cookie_path, downloads_path))
+    crawler = AsyncWebCrawler(
+        config=get_browser_config(headless, cookie_path, downloads_path)
+    )
     await crawler.start()
     return crawler
 
@@ -80,7 +81,9 @@ async def _get_current_url(crawler: AsyncWebCrawler, session_id: str) -> str:
     return page.url
 
 
-async def _extract_shop_name_from_crawler(crawler: AsyncWebCrawler, session_id: str) -> str:
+async def _extract_shop_name_from_crawler(
+    crawler: AsyncWebCrawler, session_id: str
+) -> str:
     """Extract shop name from active session page using crawl4ai."""
     current_url = await _get_current_url(crawler, session_id)
     if "mms.pinduoduo.com/home" not in current_url:
@@ -132,25 +135,27 @@ async def save_storage_state(
     try:
         strategy = crawler.crawler_strategy
         browser_manager = strategy.browser_manager
-        
+
         # 首先尝试从现有会话获取上下文 - 这是最可靠的方式
         print("[Cookie] 从会话获取浏览器上下文...")
         _, ctx = await browser_manager.get_page(
             crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
         )
-        
+
         # 检查 ctx 是否有 storage_state 方法
-        if not hasattr(ctx, 'storage_state'):
+        if not hasattr(ctx, "storage_state"):
             # 如果当前对象没有 storage_state，尝试从 browser 获取第一个 context
-            if hasattr(ctx, 'contexts') and ctx.contexts:
+            if hasattr(ctx, "contexts") and ctx.contexts:
                 ctx = ctx.contexts[0]
-                if not hasattr(ctx, 'storage_state'):
-                    raise RuntimeError("无法找到具有 storage_state 方法的 BrowserContext")
+                if not hasattr(ctx, "storage_state"):
+                    raise RuntimeError(
+                        "无法找到具有 storage_state 方法的 BrowserContext"
+                    )
             else:
                 raise RuntimeError("无法获取有效的 BrowserContext")
-        
+
         await ctx.storage_state(path=str(cookie_path))
-        if hasattr(strategy, 'logger') and strategy.logger:
+        if hasattr(strategy, "logger") and strategy.logger:
             strategy.logger.info(
                 message="Exported storage state to {path}",
                 tag="INFO",
@@ -198,7 +203,9 @@ async def qr_login(
 
                 if shop_name is None:
                     print("[登录] 正在提取店铺名称...")
-                    shop_name = await _extract_shop_name_from_crawler(crawler, session_id)
+                    shop_name = await _extract_shop_name_from_crawler(
+                        crawler, session_id
+                    )
 
                 print(f"[登录] 店铺名称: {shop_name}")
                 cookie_path = config.get_cookie_path(shop_name)
@@ -239,11 +246,15 @@ async def ensure_authenticated(shop_name: str | None = None) -> tuple[Path, str]
                     url=config.PDD_HOME_URL,
                     config=CrawlerRunConfig(session_id=session_id),
                 )
-                detected_name = await _extract_shop_name_from_crawler(crawler, session_id)
+                detected_name = await _extract_shop_name_from_crawler(
+                    crawler, session_id
+                )
                 correct_path = config.get_cookie_path(detected_name)
                 if correct_path != candidate_path:
                     await save_storage_state(crawler, session_id, correct_path)
-                    print(f"[Auth] Cookie 重命名: {candidate_path.name} → {correct_path.name}")
+                    print(
+                        f"[Auth] Cookie 重命名: {candidate_path.name} → {correct_path.name}"
+                    )
                     try:
                         candidate_path.unlink()
                     except OSError:

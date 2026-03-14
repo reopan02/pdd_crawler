@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from pathlib import Path
 
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 
@@ -232,46 +231,3 @@ async def scrape_home(crawler: AsyncWebCrawler, session_id: str) -> dict[str, ob
         "shop_name": shop_name,
         "data": seen_texts,
     }
-
-
-async def save_home_data(data: dict[str, object], output_dir: Path) -> Path:
-    """Persist scraped home data as pretty-printed JSON.
-
-    Args:
-        data: The dict returned by :func:`scrape_home`.
-        output_dir: Directory where the JSON file will be saved.
-
-    Returns:
-        The path of the saved JSON file.
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = output_dir / f"home_data_{timestamp}.json"
-
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-    print(f"首页数据已保存: {filepath}")
-    return filepath
-
-
-async def run_home_scraper(
-    crawler: AsyncWebCrawler, session_id: str, output_dir: Path | None = None
-) -> tuple[str, Path]:
-    """Orchestrate home page scraping: scrape → save.
-
-    Args:
-        crawler: An active crawl4ai crawler instance.
-        session_id: Session identifier for the crawler.
-        output_dir: Directory to save output. If None, uses shop_name-based dir.
-
-    Returns:
-        Tuple of (shop_name, output_file_path).
-    """
-    data = await scrape_home(crawler, session_id)
-    shop_name = str(data.get("shop_name", "pdd_shop"))
-
-    resolved_dir: Path = output_dir if output_dir is not None else config.OUTPUT_BASE_DIR / shop_name
-
-    filepath = await save_home_data(data, resolved_dir)
-    return shop_name, filepath

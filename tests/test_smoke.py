@@ -81,22 +81,18 @@ def test_config_urls():
 
 
 def test_config_paths():
-    """Assert OUTPUT_BASE_DIR is a Path instance."""
-    from pdd_crawler.config import OUTPUT_BASE_DIR, COOKIES_DIR
+    """Assert COOKIES_DIR is a Path instance."""
+    from pdd_crawler.config import COOKIES_DIR
 
-    assert isinstance(OUTPUT_BASE_DIR, Path)
     assert isinstance(COOKIES_DIR, Path)
 
 
 def test_config_helpers():
     """Test config helper functions."""
-    from pdd_crawler.config import get_cookie_path, get_shop_output_dir
+    from pdd_crawler.config import get_cookie_path
 
     cookie_path = get_cookie_path("测试店铺")
     assert "测试店铺_cookies.json" in str(cookie_path)
-
-    output_dir = get_shop_output_dir("测试店铺")
-    assert "测试店铺" in str(output_dir)
 
 
 def test_load_cookies_missing_file():
@@ -111,42 +107,17 @@ def test_load_cookies_missing_file():
     asyncio.run(_async_test())
 
 
-def test_save_home_data():
-    """Test home_scraper.save_home_data creates valid JSON file with correct content."""
-    from pdd_crawler.home_scraper import save_home_data
+def test_scrape_home_function_exists():
+    """Test home_scraper.scrape_home is importable and async."""
+    import inspect
+    from pdd_crawler.home_scraper import scrape_home
 
-    async def _async_test():
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-
-            test_data = {
-                "scraped_at": "2025-03-09T10:30:00",
-                "url": "https://mms.pinduoduo.com/home/",
-                "page_title": "Test Page",
-                "shop_name": "测试店铺",
-                "data": {
-                    "item_0": "Test Item 1",
-                    "item_1": "Test Item 2",
-                },
-            }
-
-            result_path = await save_home_data(test_data, output_dir)
-
-            assert result_path.exists()
-            assert result_path.suffix == ".json"
-            assert "home_data_" in result_path.name
-
-            with open(result_path, "r", encoding="utf-8") as f:
-                saved_data = json.load(f)
-
-            assert saved_data["shop_name"] == "测试店铺"
-            assert saved_data["data"]["item_0"] == "Test Item 1"
-
-    asyncio.run(_async_test())
+    assert callable(scrape_home)
+    assert inspect.iscoroutinefunction(scrape_home)
 
 
 def test_cli_help():
-    """Verify `python -m pdd_crawler --help` returns 0 and shows all options."""
+    """Verify `python -m pdd_crawler --help` returns 0 and shows web options."""
     result = subprocess.run(
         ["python", "-m", "pdd_crawler", "--help"],
         capture_output=True,
@@ -156,11 +127,8 @@ def test_cli_help():
     assert result.returncode == 0
 
     help_text = result.stdout
-    assert "--login" in help_text
-    assert "--scrape-home" in help_text
-    assert "--export-bills" in help_text
-    assert "--all" in help_text
-    assert "--shop-name" in help_text
+    assert "--host" in help_text
+    assert "--port" in help_text
 
 
 def test_navigation_function_exists():

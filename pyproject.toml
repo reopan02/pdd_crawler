@@ -22,6 +22,10 @@ dependencies = [
     "crawl4ai>=0.7.0",
     "playwright>=1.40",
     "pytest>=7.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "sse-starlette>=1.6.0",
+    "python-multipart>=0.0.6",
 ]
 
 [project.optional-dependencies]
@@ -39,3 +43,4 @@ where = ["src"]
 
 [project.scripts]
 pdd_crawler = "pdd_crawler.__main__:main"
+pdd_web = "pdd_crawler.web.run:main"

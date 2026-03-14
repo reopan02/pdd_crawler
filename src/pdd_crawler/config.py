@@ -4,35 +4,15 @@ from pathlib import Path
 
 # Project directories
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-COOKIES_DIR = PROJECT_ROOT / "cookies"
 
-# Output directory - all outputs (scraped data + downloaded bills) go here
-# Structure: output/{shop_name}/
-OUTPUT_BASE_DIR = PROJECT_ROOT / "output"
+# Legacy paths — kept for cookie_manager.py backward compatibility
+# but no longer used for persistent storage. All data is in-memory.
+COOKIES_DIR = PROJECT_ROOT / "cookies"
 
 
 def get_cookie_path(shop_name: str) -> Path:
-    """Get cookie file path for a specific shop.
-
-    Args:
-        shop_name: Sanitized shop name.
-
-    Returns:
-        Path to the cookie JSON file.
-    """
+    """Get cookie file path for a specific shop (legacy, used by cookie_manager)."""
     return COOKIES_DIR / f"{shop_name}_cookies.json"
-
-
-def get_shop_output_dir(shop_name: str) -> Path:
-    """Get output directory for a specific shop.
-
-    Args:
-        shop_name: Sanitized shop name.
-
-    Returns:
-        Path to the shop's output directory.
-    """
-    return OUTPUT_BASE_DIR / shop_name
 
 
 # Default configuration

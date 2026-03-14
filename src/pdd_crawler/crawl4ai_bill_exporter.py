@@ -173,7 +173,9 @@ async def _dismiss_popups(page) -> None:
         buttons = await page.query_selector_all("button, a, span, div")
         for button in buttons:
             try:
-                text_content = await button.evaluate("el => (el.innerText || el.textContent || '').trim()")
+                text_content = await button.evaluate(
+                    "el => (el.innerText || el.textContent || '').trim()"
+                )
                 if text_content and any(t in text_content for t in close_texts):
                     await button.click()
                     await asyncio.sleep(0.5)
@@ -304,7 +306,9 @@ async def _navigate_to_bill_tab(
             last_page = page
 
             # ── Step 1: Navigate through mms proxy to establish cashier session via SSO ticket ──
-            print(f"[账单-导航] 第{attempt}次尝试, Step 1: 通过mms代理页建立cashier会话 (SSO)")
+            print(
+                f"[账单-导航] 第{attempt}次尝试, Step 1: 通过mms代理页建立cashier会话 (SSO)"
+            )
             try:
                 await page.goto(
                     config.MMS_CASHIER_PROXY_URL,
@@ -323,9 +327,13 @@ async def _navigate_to_bill_tab(
 
             sso_url = page.url or ""
             if "cashier.pinduoduo.com" not in sso_url:
-                print(f"[账单-导航] 第{attempt}次尝试, Step 1: SSO重定向未到达cashier: {sso_url}")
+                print(
+                    f"[账单-导航] 第{attempt}次尝试, Step 1: SSO重定向未到达cashier: {sso_url}"
+                )
                 continue
-            print(f"[账单-导航] 第{attempt}次尝试, Step 1: SSO完成, 已到达cashier: {sso_url}")
+            print(
+                f"[账单-导航] 第{attempt}次尝试, Step 1: SSO完成, 已到达cashier: {sso_url}"
+            )
 
             await _dismiss_popups(page)
             await _take_debug_screenshot(page, f"cashier_sso_attempt{attempt}", None)
@@ -338,7 +346,9 @@ async def _navigate_to_bill_tab(
                 print(f"[账单-导航] 第{attempt}次尝试, Step 2: 导航到目标账单页")
                 await _human_delay(1.0, 2.0)
                 try:
-                    await page.goto(tab_url, wait_until="domcontentloaded", timeout=30000)
+                    await page.goto(
+                        tab_url, wait_until="domcontentloaded", timeout=30000
+                    )
                 except Exception as e:
                     print(f"[账单-导航] 第{attempt}次尝试, Step 2导航失败: {e}")
 
@@ -350,7 +360,9 @@ async def _navigate_to_bill_tab(
 
             final_url = page.url or ""
             if "cashier.pinduoduo.com" not in final_url:
-                print(f"[账单-导航] 第{attempt}次尝试, Step 2: 未能停留在cashier域名: {final_url}")
+                print(
+                    f"[账单-导航] 第{attempt}次尝试, Step 2: 未能停留在cashier域名: {final_url}"
+                )
                 continue
 
             # ── Step 3: Verify no anti-bot block ──
@@ -358,7 +370,9 @@ async def _navigate_to_bill_tab(
 
             body_text = await page.evaluate("document.body.innerText || ''") or ""
             if _is_blocked(body_text, final_url):
-                _log_blocked_reason(body_text, final_url, f"bill_verify_attempt_{attempt}")
+                _log_blocked_reason(
+                    body_text, final_url, f"bill_verify_attempt_{attempt}"
+                )
                 print(f"[账单-导航] 第{attempt}次尝试, Step 3: 页面疑似风控，准备重试")
                 continue
 
@@ -387,7 +401,7 @@ async def export_single_bill(
     output_dir: Path,
 ) -> Path | None:
     """Export a single tab bill and return downloaded/extracted file path.
-    
+
     Flow:
     1. Navigate to bill tab via SSO proxy
     2. Click export button → new tab opens automatically to export history page
@@ -413,7 +427,7 @@ async def export_single_bill(
         'button[class*="export"]',
         '[class*="export"] button',
     ]
-    
+
     # Use Playwright's wait_for_event to capture new page (tab)
     # Start waiting for the 'page' event BEFORE clicking the button
     try:
@@ -423,21 +437,21 @@ async def export_single_bill(
                 print("[账单] 未找到导出按钮")
                 return None
             print("[账单] 已点击导出按钮，等待新标签页打开...")
-        
+
         new_page = await page_info.value
         print(f"[账单] 新标签页已打开: {new_page.url}")
-        
+
     except Exception as e:
         print(f"[账单] 等待新标签页失败: {e}")
         return None
-    
+
     # Wait for the new page to load
     try:
         await new_page.wait_for_load_state("domcontentloaded", timeout=15000)
     except Exception:
         pass
     await _human_delay(1.0, 2.0)
-    
+
     # Verify we're on the export history page
     current_url = new_page.url or ""
     if "export-history" not in current_url:
@@ -445,84 +459,94 @@ async def export_single_bill(
         # If not on export history, try navigating directly
         export_history_url = config.BILL_EXPORT_HISTORY_MAP.get(tab_url)
         if not export_history_url:
-            tab_part = tab_url.split("tab=")[1].split("&")[0] if "tab=" in tab_url else "4001"
+            tab_part = (
+                tab_url.split("tab=")[1].split("&")[0] if "tab=" in tab_url else "4001"
+            )
             export_history_url = (
                 "https://cashier.pinduoduo.com/main/bills/export-history"
                 f"?tab={tab_part}&__app_code=113"
             )
         try:
-            await new_page.goto(export_history_url, wait_until="domcontentloaded", timeout=30000)
+            await new_page.goto(
+                export_history_url, wait_until="domcontentloaded", timeout=30000
+            )
         except Exception as e:
             print(f"[账单] 导航到导出历史页失败: {e}")
             return None
-    
+
     # Check for anti-bot blocking
     history_body = await new_page.evaluate("document.body.innerText || ''") or ""
     if _is_blocked(history_body, current_url):
         _log_blocked_reason(history_body, current_url, "export_history")
         print(f"⚠️ 导出记录页被拦截，跳过: {tab_url}")
         return None
-    
+
     await _take_debug_screenshot(new_page, "export_history_page", output_dir)
-    
+
     # 2) Click download button in new tab (#downloadBalance-btn-0)
     # Use Playwright's expect_download for reliable download handling
     print("[账单] 寻找下载按钮...")
-    
+
     # Try specific download button ID first, then fallback to other selectors
     download_selectors = [
         "#downloadBalance-btn-0",
         "[id^='downloadBalance-btn']",
         'button:has-text("下载账单")',
         'button:has-text("下载")',
-        "[href*=\"download\"]",
+        '[href*="download"]',
         "a[download]",
         'button[class*="download"]',
     ]
-    
+
     # Wait for download event when clicking the button
     try:
         async with new_page.expect_download(timeout=60000) as download_info:
-            clicked_download = await _pw_click(new_page, download_selectors, ["下载账单", "下载"])
-            
+            clicked_download = await _pw_click(
+                new_page, download_selectors, ["下载账单", "下载"]
+            )
+
             if not clicked_download:
                 print("[账单] 未找到下载按钮，尝试等待页面加载...")
                 await _human_delay(2.0, 3.0)
-                clicked_download = await _pw_click(new_page, download_selectors, ["下载账单", "下载"])
-            
+                clicked_download = await _pw_click(
+                    new_page, download_selectors, ["下载账单", "下载"]
+                )
+
             if not clicked_download:
                 print("[账单] 下载按钮未找到")
                 return None
-            
+
             print("[账单] 已点击下载按钮，等待下载完成...")
-        
+
         download = await download_info.value
         suggested_name = download.suggested_filename
         print(f"[账单] 下载文件名: {suggested_name}")
-        
+
         # Save to output directory
         download_path = output_dir / suggested_name
         await download.save_as(download_path)
         downloaded_file = download_path
-        
+
     except Exception as e:
         print(f"[账单] 下载事件捕获失败，尝试轮询方式: {e}")
         # Fallback to polling method
         before_files = set(output_dir.iterdir()) if output_dir.exists() else set()
-        
-        clicked_download = await _pw_click(new_page, download_selectors, ["下载账单", "下载"])
+
+        clicked_download = await _pw_click(
+            new_page, download_selectors, ["下载账单", "下载"]
+        )
         if not clicked_download:
             print("[账单] 下载按钮未找到")
             return None
-        
+
         print("[账单] 已点击下载按钮，等待文件出现...")
-        
+
         downloaded_file = await _wait_for_new_download(
             output_dir=output_dir,
             before=before_files,
             timeout_s=max(10, config.DOWNLOAD_TIMEOUT // 1000),
         )
-        
+
         if downloaded_file is None:
             print("[账单] 下载超时")
             return None
@@ -554,11 +578,15 @@ async def export_all_bills(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded: list[Path] = []
-    for i, tab_url in enumerate([config.CASHIER_BILL_4001_URL, config.CASHIER_BILL_4002_URL]):
+    for i, tab_url in enumerate(
+        [config.CASHIER_BILL_4001_URL, config.CASHIER_BILL_4002_URL]
+    ):
         # Use a unique session per tab to avoid contamination from blocked attempts
         tab_session_id = f"{session_id}_tab{i}"
         try:
-            result = await export_single_bill(crawler, tab_session_id, tab_url, output_dir)
+            result = await export_single_bill(
+                crawler, tab_session_id, tab_url, output_dir
+            )
             if result is not None:
                 downloaded.append(result)
         except Exception as e:

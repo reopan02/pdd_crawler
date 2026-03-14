@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDD 数据采集系统 - 工业版</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #f5f5f7;
+            --panel-bg: #ffffff;
+            --border-color: #e5e5ea;
+            --text-primary: #1d1d1f;
+            --text-secondary: #86868b;
+            --accent-green: #34c759;
+            --accent-red: #ff3b30;
+            --accent-yellow: #f59e0b;
+            --accent-blue: #0071e3;
+            --hover-bg: #f5f5f7;
+            --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            --radius-card: 16px;
+            --radius-btn: 8px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 16px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        pre, code, .mono {
+            font-family: var(--font-mono);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+
+        /* Layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px 100px;
+        }
+
+        header {
+            position: sticky;
+            top: 0;
+            background: rgba(245, 245, 247, 0.8);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            padding: 16px 0;
+            margin-bottom: 40px;
+            z-index: 100;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+
+        nav {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 32px;
+        }
+
+        .nav-links a {
+            color: var(--text-primary);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--accent-blue);
+        }
+
+        .logo {
+            font-weight: 700;
+            font-size: 20px;
+            letter-spacing: 0.5px;
+            color: var(--text-primary);
+        }
+
+        section {
+            padding-top: 40px;
+            margin-bottom: 60px;
+        }
+
+        .section-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            letter-spacing: -0.5px;
+        }
+
+        .card {
+            background: var(--panel-bg);
+            border-radius: var(--radius-card);
+            padding: 32px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(0,0,0,0.02);
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 20px;
+            border-radius: var(--radius-btn);
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+            border: none;
+            background: #e8e8ed;
+            color: var(--text-primary);
+        }
+
+        .btn:hover:not(:disabled) {
+            background: #d1d1d6;
+        }
+
+        .btn:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: var(--accent-blue);
+            color: #fff;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #0077ed;
+        }
+
+        .btn-danger {
+            background: rgba(255, 59, 48, 0.1);
+            color: var(--accent-red);
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: rgba(255, 59, 48, 0.2);
+        }
+
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 13px;
+            border-radius: 6px;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 15px;
+        }
+
+        th {
+            text-align: left;
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        td {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: middle;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge-unknown { background: #f5f5f7; color: #86868b; }
+        .badge-valid { background: rgba(52, 199, 89, 0.15); color: #248a3d; }
+        .badge-invalid { background: rgba(255, 59, 48, 0.15); color: #c93429; }
+        .badge-validating { background: rgba(245, 158, 11, 0.15); color: #b47509; }
+
+        /* Forms */
+        .form-group { margin-bottom: 24px; }
+        label { display: block; margin-bottom: 12px; font-size: 15px; font-weight: 500; color: var(--text-primary); }
+        
+        .multi-select-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 16px;
+        }
+        
+        .account-card {
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #fff;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .account-card:hover {
+            border-color: #c5c5cb;
+        }
+        
+        .account-card.selected {
+            border-color: var(--accent-blue);
+            background: rgba(0, 113, 227, 0.03);
+        }
+        
+        .account-card input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            accent-color: var(--accent-blue);
+            cursor: pointer;
+        }
+        
+        .account-info {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .account-name {
+            font-weight: 600;
+            font-size: 15px;
+            color: var(--text-primary);
+        }
+        
+        .account-status {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 24px;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 15px;
+        }
+        .checkbox-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent-blue);
+        }
+
+        /* Progress */
+        .progress-container {
+            margin: 24px 0;
+            background: #e5e5ea;
+            border-radius: 10px;
+            height: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        .progress-bar {
+            background: var(--accent-blue);
+            height: 100%;
+            transition: width 0.4s cubic-bezier(0.2, 0, 0, 1);
+            border-radius: 10px;
+        }
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 12px;
+            font-weight: 600;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        .modal {
+            background: var(--panel-bg);
+            border-radius: 20px;
+            width: min(90vw, 480px);
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        }
+        .qr-image {
+            width: 240px;
+            height: 240px;
+            margin: 24px auto;
+            background: #fff;
+            padding: 12px;
+            display: block;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            object-fit: contain;
+            cursor: zoom-in;
+            transition: transform 0.2s ease;
+        }
+        .qr-image:hover {
+            transform: scale(1.02);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+        }
+
+        /* Image Preview Overlay */
+        .preview-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(10px);
+            z-index: 2000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: zoom-out;
+            animation: fadeIn 0.2s ease;
+        }
+        .preview-image {
+            max-width: 90vw;
+            max-height: 90vh;
+            border-radius: 8px;
+            box-shadow: 0 0 40px rgba(0,0,0,0.5);
+            animation: zoomIn 0.3s cubic-bezier(0.2, 0, 0, 1);
+        }
+        @keyframes zoomIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .toast {
+            padding: 16px 24px;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 500;
+            min-width: 240px;
+            animation: slideIn 0.4s cubic-bezier(0.2, 0, 0, 1);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            border: 1px solid rgba(0,0,0,0.05);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        @keyframes slideIn { 
+            from { transform: translateX(120%) scale(0.9); opacity: 0; } 
+            to { transform: translateX(0) scale(1); opacity: 1; } 
+        }
+        .toast-success { color: var(--text-primary); border-left: 4px solid var(--accent-green); }
+        .toast-error { color: var(--text-primary); border-left: 4px solid var(--accent-red); }
+
+        /* Utilities */
+        .flex { display: flex; }
+        .flex-col { display: flex; flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .justify-end { justify-content: flex-end; }
+        .gap-12 { gap: 12px; }
+        .gap-16 { gap: 16px; }
+        .mt-24 { margin-top: 24px; }
+        .mb-16 { margin-bottom: 16px; }
+        .text-right { text-align: right; }
+        
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        const generateUUID = () => {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        };
+
+        const getSessionId = () => {
+            let sid = localStorage.getItem('pdd_session_id');
+            if (!sid) {
+                sid = generateUUID();
+                localStorage.setItem('pdd_session_id', sid);
+            }
+            return sid;
+        };
+
+        function App() {
+            const [sessionId] = useState(getSessionId());
+            const [cookies, setCookies] = useState([]);
+            const [tasks, setTasks] = useState([]);
+            const [toasts, setToasts] = useState([]);
+            const [qrModal, setQrModal] = useState({ show: false, qrCode: null, status: '等待中...', taskId: null });
+            const [previewImage, setPreviewImage] = useState(null);
+            const [crawlStatus, setCrawlStatus] = useState({ running: false, progress: 0, message: '', taskId: null });
+            const [cleanedReport, setCleanedReport] = useState(null);
+
+            // Updated Form states for multi-select
+            const [selectedCookies, setSelectedCookies] = useState([]);
+            const [crawlOps, setCrawlOps] = useState({ scrape_home: true, export_bills: true });
+
+            const eventSourceRef = useRef(null);
+
+            const addToast = (message, type = 'success') => {
+                const id = Date.now();
+                setToasts(prev => [...prev, { id, message, type }]);
+                setTimeout(() => {
+                    setToasts(prev => prev.filter(t => t.id !== id));
+                }, 4000);
+            };
+
+            const apiFetch = async (url, options = {}) => {
+                const headers = {
+                    'X-Session-ID': sessionId,
+                    ...options.headers,
+                };
+                const fetchOptions = { ...options, headers };
+                if (options.body && !(options.body instanceof FormData)) {
+                    headers['Content-Type'] = 'application/json';
+                    fetchOptions.body = JSON.stringify(options.body);
+                } else if (options.body instanceof FormData) {
+                    fetchOptions.body = options.body;
+                }
+                
+                try {
+                    const response = await fetch(url, fetchOptions);
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.detail || '请求失败');
+                    }
+                    return data;
+                } catch (err) {
+                    addToast(err.message, 'error');
+                    throw err;
+                }
+            };
+
+            const fetchCookies = async () => {
+                try {
+                    const data = await apiFetch('/api/cookies');
+                    setCookies(data.cookies || []);
+                } catch(e) {}
+            };
+
+            const fetchTasks = async () => {
+                try {
+                    const data = await apiFetch('/api/tasks');
+                    setTasks(data.tasks || []);
+                } catch(e) {}
+            };
+
+            useEffect(() => {
+                fetchCookies();
+                fetchTasks();
+            }, []);
+
+            // --- Section 1: Cookie Actions ---
+            const handleFileUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                    await apiFetch('/api/cookies/upload', { method: 'POST', body: formData });
+                    addToast('上传成功');
+                    fetchCookies();
+                } catch (e) {}
+                e.target.value = '';
+            };
+
+            const handleValidate = async (id) => {
+                try {
+                    await apiFetch(`/api/cookies/${id}/validate`, { method: 'POST' });
+                    addToast('验证任务已启动');
+                    fetchCookies();
+                } catch (e) {}
+            };
+
+            const handleDelete = async (id) => {
+                if (!confirm('确定删除该 Cookie 吗？')) return;
+                try {
+                    await apiFetch(`/api/cookies/${id}`, { method: 'DELETE' });
+                    addToast('已删除');
+                    fetchCookies();
+                    setSelectedCookies(prev => prev.filter(cId => cId !== id));
+                } catch (e) {}
+            };
+
+            const handleRename = async (id, currentName) => {
+                const newName = prompt('输入新的店铺名称:', currentName);
+                if (newName === null || newName === currentName) return;
+                try {
+                    await apiFetch(`/api/cookies/${id}/rename`, { 
+                        method: 'POST', 
+                        body: { shop_name: newName } 
+                    });
+                    addToast('修改成功');
+                    fetchCookies();
+                } catch (e) {}
+            };
+
+            const startQrLogin = async () => {
+                try {
+                    const { task_id } = await apiFetch('/api/qr-login/start', { method: 'POST' });
+                    setQrModal({ show: true, qrCode: null, status: '正在生成二维码...', taskId: task_id });
+                    
+                    const es = new EventSource(`/api/qr-login/${task_id}/stream?session_id=${sessionId}`);
+                    eventSourceRef.current = es;
+
+                    es.addEventListener('qr_code', (e) => {
+                        const data = JSON.parse(e.data);
+                        setQrModal(prev => ({ ...prev, qrCode: data.image, status: data.message || '请扫码' }));
+                    });
+
+                    es.addEventListener('status', (e) => {
+                        const data = JSON.parse(e.data);
+                        setQrModal(prev => ({ ...prev, status: data.message || data.status }));
+                    });
+
+                    es.addEventListener('completed', (e) => {
+                        addToast('扫码登录成功');
+                        closeQrModal();
+                        fetchCookies();
+                    });
+
+                    es.addEventListener('error', (e) => {
+                        try {
+                            const data = JSON.parse(e.data);
+                            setQrModal(prev => ({ ...prev, status: `错误: ${data.error}` }));
+                            addToast(`扫码失败: ${data.error}`, 'error');
+                        } catch(err) {
+                            addToast('扫码连接中断', 'error');
+                        }
+                        es.close();
+                    });
+                } catch (e) {}
+            };
+
+            const closeQrModal = () => {
+                if (eventSourceRef.current) {
+                    eventSourceRef.current.close();
+                    eventSourceRef.current = null;
+                }
+                setQrModal({ show: false, qrCode: null, status: '', taskId: null });
+            };
+
+            // --- Section 2: Crawl Actions ---
+            const toggleCookieSelection = (cookieId) => {
+                setSelectedCookies(prev => {
+                    if (prev.includes(cookieId)) {
+                        return prev.filter(id => id !== cookieId);
+                    } else {
+                        return [...prev, cookieId];
+                    }
+                });
+            };
+
+            const selectAllCookies = () => {
+                const validCookieIds = cookies.filter(c => c.status !== 'invalid').map(c => c.cookie_id);
+                if (selectedCookies.length === validCookieIds.length) {
+                    setSelectedCookies([]); // Deselect all
+                } else {
+                    setSelectedCookies(validCookieIds); // Select all
+                }
+            };
+
+            const startCrawl = async () => {
+                if (selectedCookies.length === 0) {
+                    addToast('请至少选择一个 Cookie 账号', 'error');
+                    return;
+                }
+                const ops = [];
+                if (crawlOps.scrape_home) ops.push('scrape_home');
+                if (crawlOps.export_bills) ops.push('export_bills');
+                if (ops.length === 0) {
+                    addToast('请至少选择一个操作', 'error');
+                    return;
+                }
+                try {
+                    const { task_id } = await apiFetch('/api/crawl/start', {
+                        method: 'POST',
+                        body: { cookie_ids: selectedCookies, operations: ops }
+                    });
+                    setCrawlStatus({ running: true, progress: 0, message: '初始化...', taskId: task_id });
+                    
+                    const es = new EventSource(`/api/tasks/${task_id}/progress?session_id=${sessionId}`);
+                    
+                    es.addEventListener('progress', (e) => {
+                        const data = JSON.parse(e.data);
+                        setCrawlStatus(prev => ({ 
+                            ...prev, 
+                            progress: data.progress, 
+                            message: data.message 
+                        }));
+                    });
+                    es.addEventListener('completed', async (e) => {
+                        const data = JSON.parse(e.data);
+                        setCrawlStatus(prev => ({ ...prev, running: false, progress: 100, message: data.message || '完成' }));
+                        addToast('采集完成');
+                        es.close();
+                        await fetchTasks();
+                        await cleanFromTask(task_id, true);
+                    });
+                    es.addEventListener('error', (e) => {
+                        try {
+                            const data = JSON.parse(e.data);
+                            addToast(`采集失败: ${data.error}`, 'error');
+                        } catch(err) {
+                            addToast('采集连接中断', 'error');
+                        }
+                        setCrawlStatus(prev => ({ ...prev, running: false }));
+                        es.close();
+                    });
+                } catch (e) {}
+            };
+
+            // --- Section 3: Clean Actions ---
+            const cleanFromTask = async (taskId = null, silent = false) => {
+                let targetTaskId = taskId;
+                if (!targetTaskId) {
+                    const completedTasks = tasks.filter(t => t.status === 'completed' && t.has_data);
+                    const lastTask = completedTasks[completedTasks.length - 1];
+                    targetTaskId = lastTask?.task_id;
+                }
+                if (!targetTaskId) {
+                    addToast('未找到已完成的采集任务', 'error');
+                    return;
+                }
+                try {
+                    const data = await apiFetch(`/api/clean/from-task/${targetTaskId}`, { method: 'POST' });
+                    const reports = Array.isArray(data.reports)
+                        ? data.reports
+                        : Array.isArray(data.report)
+                            ? data.report
+                            : [data.report];
+                    setCleanedReport(reports);
+                    addToast(silent ? '已自动传入“数据清洗与处理”步骤' : '清洗成功');
+                } catch (e) {}
+            };
+
+            const handleManualClean = async (e) => {
+                const files = e.target.files;
+                if (!files.length) return;
+                
+                const formData = new FormData();
+                for (let i = 0; i < files.length; i++) {
+                    formData.append('files', files[i]);
+                }
+
+                try {
+                    const data = await apiFetch('/api/clean', { method: 'POST', body: formData });
+                    setCleanedReport(data);
+                    addToast('清洗成功');
+                } catch (e) {}
+                e.target.value = '';
+            };
+
+            const downloadReport = () => {
+                if (!cleanedReport) return;
+                const blob = new Blob([JSON.stringify(cleanedReport, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `pdd_report_${new Date().toISOString().slice(0,10)}.json`;
+                a.click();
+            };
+
+            return (
+                <div className="container">
+                    <header>
+                        <nav>
+                            <div className="logo">PDD Crawler</div>
+                            <div className="nav-links">
+                                <a href="#cookies">Cookie</a>
+                                <a href="#crawl">采集</a>
+                                <a href="#clean">清洗</a>
+                            </div>
+                        </nav>
+                    </header>
+
+                    {/* Section 1: Cookie 管理 */}
+                    <section id="cookies">
+                        <div className="section-title">
+                            <span>1. Cookie 账号管理</span>
+                            <div className="flex gap-12">
+                                <input 
+                                    type="file" 
+                                    id="cookieUpload" 
+                                    style={{display: 'none'}} 
+                                    onChange={handleFileUpload} 
+                                    accept=".json"
+                                />
+                                <button className="btn btn-sm" onClick={() => document.getElementById('cookieUpload').click()}>上传 JSON</button>
+                                <button className="btn btn-primary btn-sm" onClick={startQrLogin}>+ 扫码登录</button>
+                            </div>
+                        </div>
+                        <div className="card">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>店铺名称</th>
+                                        <th>状态</th>
+                                        <th>Cookie 数量</th>
+                                        <th className="text-right">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {cookies.length === 0 ? (
+                                        <tr><td colSpan="4" className="empty-state">暂无数据，请扫码登录或上传 Cookie</td></tr>
+                                    ) : cookies.map(c => (
+                                        <tr key={c.cookie_id}>
+                                            <td className="mono" style={{fontWeight: 500}}>
+                                                <span 
+                                                    style={{cursor: 'pointer', padding: '4px 0', borderBottom: '1px dashed var(--border-color)'}}
+                                                    onClick={() => handleRename(c.cookie_id, c.shop_name)}
+                                                    title="点击修改店铺名称"
+                                                >
+                                                    {c.shop_name || '未命名店铺'}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span className={`badge badge-${c.status}`}>
+                                                    {c.status === 'valid' ? '有效' : c.status === 'invalid' ? '失效' : c.status === 'validating' ? '验证中' : '未知'}
+                                                </span>
+                                            </td>
+                                            <td className="mono text-secondary">{c.cookie_count}</td>
+                                            <td className="text-right">
+                                                <div className="flex gap-12 justify-end">
+                                                    <button className="btn btn-sm" onClick={() => handleValidate(c.cookie_id)}>验证</button>
+                                                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(c.cookie_id)}>删除</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    {/* Section 2: 数据采集 */}
+                    <section id="crawl">
+                        <div className="section-title">2. 批量数据采集</div>
+                        <div className="card">
+                            <div className="form-group">
+                                <div className="flex justify-between items-center mb-16">
+                                    <label style={{marginBottom: 0}}>选择要采集的店铺 ({selectedCookies.length} / {cookies.filter(c => c.status !== 'invalid').length})</label>
+                                    <button className="btn btn-sm" onClick={selectAllCookies}>全选 / 反选</button>
+                                </div>
+                                <div className="multi-select-grid">
+                                    {cookies.filter(c => c.status !== 'invalid').length === 0 ? (
+                                        <div className="empty-state" style={{gridColumn: '1 / -1', padding: '20px'}}>没有可用的有效账号</div>
+                                    ) : cookies.filter(c => c.status !== 'invalid').map(c => {
+                                        const isSelected = selectedCookies.includes(c.cookie_id);
+                                        return (
+                                            <div 
+                                                key={c.cookie_id} 
+                                                className={`account-card ${isSelected ? 'selected' : ''}`}
+                                                onClick={() => toggleCookieSelection(c.cookie_id)}
+                                            >
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={isSelected}
+                                                    onChange={() => {}} // Handle click on the card instead
+                                                    onClick={(e) => e.stopPropagation()} // Prevent double toggle
+                                                />
+                                                <div className="account-info">
+                                                    <span className="account-name">{c.shop_name}</span>
+                                                    <span className="account-status">状态: {c.status === 'valid' ? '有效' : '未验证'}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            
+                            <div className="form-group mt-24">
+                                <label>选择采集操作</label>
+                                <div className="checkbox-group">
+                                    <label className="checkbox-item">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={crawlOps.scrape_home} 
+                                            onChange={e => setCrawlOps({...crawlOps, scrape_home: e.target.checked})}
+                                        /> 抓取首页概览数据
+                                    </label>
+                                    <label className="checkbox-item">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={crawlOps.export_bills} 
+                                            onChange={e => setCrawlOps({...crawlOps, export_bills: e.target.checked})}
+                                        /> 导出详细账单
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <button 
+                                className="btn btn-primary" 
+                                style={{marginTop: '12px', padding: '12px 28px'}}
+                                onClick={startCrawl}
+                                disabled={crawlStatus.running && crawlStatus.progress < 100}
+                            >
+                                {crawlStatus.running ? '采集中...' : '开始批量采集'}
+                            </button>
+
+                            {crawlStatus.running && (
+                                <div className="mt-24">
+                                    <div className="progress-container">
+                                        <div className="progress-bar" style={{width: `${crawlStatus.progress}%`}}></div>
+                                        {crawlStatus.progress > 0 && <div className="progress-text">{crawlStatus.progress}%</div>}
+                                    </div>
+                                    <div className="mono" style={{fontSize: '13px', color: 'var(--accent-blue)', marginTop: '8px', fontWeight: 500}}>
+                                        {crawlStatus.message}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+
+                    {/* Section 3: 数据清洗 */}
+                    <section id="clean">
+                        <div className="section-title">3. 数据清洗与处理</div>
+                        <div className="card">
+                            <div className="flex gap-12">
+                                <button className="btn" onClick={cleanFromTask}>从最新采集结果清洗</button>
+                                <input 
+                                    type="file" 
+                                    id="manualClean" 
+                                    multiple 
+                                    style={{display: 'none'}} 
+                                    onChange={handleManualClean}
+                                />
+                                <button className="btn" onClick={() => document.getElementById('manualClean').click()}>手动上传清洗</button>
+                            </div>
+
+                            {cleanedReport && (
+                                <div className="mt-24">
+                                    <div className="flex justify-between items-center mb-16">
+                                        <span style={{fontSize: '16px', fontWeight: 600}}>清洗报告预览</span>
+                                        <button className="btn btn-sm btn-primary" onClick={downloadReport}>下载清洗结果 (JSON)</button>
+                                    </div>
+                                    <div style={{
+                                        overflowX: 'auto', 
+                                        borderRadius: '12px',
+                                        background: '#f5f5f7', 
+                                        padding: '20px',
+                                        border: '1px solid rgba(0,0,0,0.05)'
+                                    }}>
+                                        <pre style={{fontSize: '13px', color: '#1d1d1f', margin: 0}}>{JSON.stringify(cleanedReport, null, 2)}</pre>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+
+
+
+                    {/* QR Login Modal */}
+                    {qrModal.show && (
+                        <div className="modal-overlay">
+                            <div className="modal">
+                                <h2 style={{marginBottom: '12px', fontSize: '24px', fontWeight: 600}}>扫码登录 PDD</h2>
+                                <p style={{fontSize: '15px', color: 'var(--text-secondary)'}}>请使用拼多多商家版 App 扫码</p>
+                                
+                                {qrModal.qrCode ? (
+                                    <img 
+                                        src={`data:image/png;base64,${qrModal.qrCode}`} 
+                                        className="qr-image" 
+                                        alt="二维码" 
+                                        onClick={() => setPreviewImage(qrModal.qrCode)}
+                                        title="点击放大预览"
+                                    />
+                                ) : (
+                                    <div className="qr-image flex items-center justify-center text-secondary">正在获取二维码...</div>
+                                )}
+                                
+                                <div style={{
+                                    margin: '24px 0', 
+                                    fontSize: '15px', 
+                                    fontWeight: 500,
+                                    color: qrModal.status.includes('错误') ? 'var(--accent-red)' : 'var(--accent-blue)'
+                                }}>
+                                    {qrModal.status}
+                                </div>
+                                
+                                <button className="btn btn-danger" style={{width: '100%', padding: '12px'}} onClick={closeQrModal}>取消登录</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Image Preview Overlay */}
+                    {previewImage && (
+                        <div className="preview-overlay" onClick={() => setPreviewImage(null)}>
+                            <img 
+                                src={`data:image/png;base64,${previewImage}`} 
+                                className="preview-image" 
+                                alt="二维码预览"
+                                onClick={(e) => e.stopPropagation()} // Prevent closing when clicking the image itself
+                            />
+                            <div style={{
+                                position: 'absolute', 
+                                bottom: '40px', 
+                                color: 'rgba(255,255,255,0.8)', 
+                                fontSize: '14px',
+                                fontWeight: 500
+                            }}>点击任意位置关闭</div>
+                        </div>
+                    )}
+
+                    {/* Toasts */}
+                    <div className="toast-container">
+                        {toasts.map(t => (
+                            <div key={t.id} className={`toast toast-${t.type}`}>
+                                {t.type === 'success' ? '✓ ' : '⚠️ '} {t.message}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
