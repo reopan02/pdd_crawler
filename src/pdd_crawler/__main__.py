@@ -24,8 +24,8 @@ def main() -> None:
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="监听端口 (默认: 8000)",
+        default=8089,
+        help="监听端口 (默认: 8089)",
     )
     args = parser.parse_args()
 
