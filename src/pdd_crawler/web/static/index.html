@@ -732,12 +732,18 @@
 
             const downloadReport = () => {
                 if (!cleanedReport) return;
-                const blob = new Blob([JSON.stringify(cleanedReport, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `pdd_report_${new Date().toISOString().slice(0,10)}.json`;
-                a.click();
+                const reports = Array.isArray(cleanedReport) ? cleanedReport : [cleanedReport];
+                reports.forEach(report => {
+                    const shopName = report['店铺名称'] || '未知店铺';
+                    const dataDate = report['数据日期'] || new Date().toISOString().slice(0, 10);
+                    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${shopName}_${dataDate}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                });
             };
 
             return (
