@@ -11,11 +11,13 @@ from __future__ import annotations
 import asyncio
 import random
 import zipfile
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from playwright.async_api import Page
+
+import re
 
 from pdd_crawler import config
 
@@ -186,6 +188,170 @@ async def _dismiss_popups(page) -> None:
     except Exception as e:
         # Best effort - never crash the caller
         pass
+
+
+async def _read_picker_date(page: Page) -> str:
+    """Read the current date string from the date range input on the page.
+
+    Returns the raw value like '2026-03-14 00:00:00 ~ 2026-03-14 23:59:59',
+    or '' if not found.
+    """
+    for selector in (
+        '[data-testid="beast-core-rangePicker-htmlInput"]',
+    ):
+        loc = page.locator(selector)
+        if await loc.count() > 0:
+            val = await loc.first.input_value()
+            if val:
+                return val.strip()
+    for placeholder in ("开始日期-结束日期", "请选择时间范围"):
+        loc = page.get_by_placeholder(placeholder)
+        if await loc.count() > 0:
+            val = await loc.first.input_value()
+            if val:
+                return val.strip()
+    return ""
+
+
+def _parse_date_from_picker_value(picker_value: str) -> str:
+    """Extract a YYYY-MM-DD date from the picker input value.
+
+    The value looks like '2026-03-15 00:00:00 ~ 2026-03-15 23:59:59'.
+    Returns the first date found, e.g. '2026-03-15', or '' on failure.
+    """
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", picker_value)
+    return m.group(1) if m else ""
+
+
+async def _select_yesterday_date(page: Page) -> str:
+    """Select yesterday's date range in the cashier bill date picker.
+
+    Supports two picker variants:
+      - Tab 4001: has a "昨天" shortcut button → click it (auto-closes picker).
+      - Tab 4002: no "昨天" button → double-click yesterday's date cell in the
+        calendar, then click "确认".
+
+    Yesterday is determined from the PDD page's current date display (not from
+    the local system clock), avoiding timezone mismatches across deployments.
+
+    After the date is set, clicks "查询" to refresh the table.
+
+    Returns:
+        The YYYY-MM-DD date string that was selected (e.g. '2026-03-14'),
+        or '' if selection failed.
+    """
+    try:
+        # ── Read PDD's "today" from the page's default date input ──
+        # The page loads with today's date pre-filled.  We parse it to derive
+        # yesterday without relying on the local system clock.
+        current_picker_value = await _read_picker_date(page)
+        pdd_today_str = _parse_date_from_picker_value(current_picker_value)
+        if pdd_today_str:
+            pdd_today = datetime.strptime(pdd_today_str, "%Y-%m-%d").date()
+            pdd_yesterday = pdd_today - timedelta(days=1)
+            print(
+                f"[账单-日期] PDD页面当前日期: {pdd_today_str}, "
+                f"目标昨天: {pdd_yesterday.isoformat()}"
+            )
+        else:
+            pdd_yesterday = None
+            print("[账单-日期] 无法从页面读取当前日期, 将依赖快捷按钮")
+
+        # 1) Click the date range input to open the picker
+        date_input = page.locator('[data-testid="beast-core-rangePicker-htmlInput"]')
+        if await date_input.count() == 0:
+            date_input = page.get_by_placeholder("开始日期-结束日期")
+        if await date_input.count() == 0:
+            date_input = page.get_by_placeholder("请选择时间范围")
+        if await date_input.count() == 0:
+            print("[账单-日期] 未找到日期选择器输入框")
+            return ""
+
+        await date_input.first.click()
+        await _human_delay(0.5, 1.0)
+
+        # 2) Try the "昨天" shortcut button first (available on 4001)
+        yesterday_btn = page.locator("button:has-text('昨天')")
+        if await yesterday_btn.count() > 0:
+            await yesterday_btn.first.click()
+            await _human_delay(0.5, 1.0)
+            print("[账单-日期] 已点击'昨天'快捷按钮 (4001模式)")
+
+            # Click "确认" if picker is still open
+            confirm_btn = page.locator("button:has-text('确认')")
+            if await confirm_btn.count() > 0:
+                try:
+                    await confirm_btn.first.click(timeout=2000)
+                    await _human_delay(0.3, 0.6)
+                except Exception:
+                    pass
+        else:
+            # 4002 mode: no "昨天" button → double-click yesterday in calendar
+            if pdd_yesterday is None:
+                print("[账单-日期] 4002模式需要日期但无法从页面获取")
+                return ""
+
+            print("[账单-日期] 无'昨天'按钮, 使用日历双击模式 (4002模式)")
+            day_str = str(pdd_yesterday.day)
+
+            day_cell = None
+            tables = page.locator("table")
+            table_count = await tables.count()
+
+            for t_idx in range(table_count):
+                table = tables.nth(t_idx)
+                cells = table.locator("td")
+                cell_count = await cells.count()
+                for c_idx in range(cell_count):
+                    cell = cells.nth(c_idx)
+                    cell_text = (await cell.inner_text()).strip()
+                    if cell_text == day_str:
+                        cursor = await cell.evaluate(
+                            "el => window.getComputedStyle(el).cursor"
+                        )
+                        if cursor == "pointer":
+                            day_cell = cell
+                            break
+                if day_cell is not None:
+                    break
+
+            if day_cell is None:
+                print(f"[账单-日期] 未在日历中找到昨天({day_str}号)的可点击单元格")
+                return ""
+
+            await day_cell.dblclick()
+            await _human_delay(0.5, 1.0)
+            print(f"[账单-日期] 已双击日历中的{day_str}号")
+
+            confirm_btn = page.locator("button:has-text('确认')")
+            if await confirm_btn.count() > 0:
+                await confirm_btn.first.click()
+                await _human_delay(0.5, 1.0)
+                print("[账单-日期] 已点击'确认'")
+
+        # 3) Click "查询" to apply the date filter
+        query_btn = page.locator("button:has-text('查询')")
+        if await query_btn.count() > 0:
+            await query_btn.first.click()
+            await _human_delay(1.0, 2.0)
+            print("[账单-日期] 已点击'查询', 日期已切换为昨天")
+        else:
+            print("[账单-日期] 未找到'查询'按钮")
+
+        # 4) Read back the actual selected date from the input
+        final_value = await _read_picker_date(page)
+        selected_date = _parse_date_from_picker_value(final_value)
+        if selected_date:
+            print(f"[账单-日期] 最终选中日期: {selected_date}")
+        else:
+            # Fallback: use the computed yesterday
+            selected_date = pdd_yesterday.isoformat() if pdd_yesterday else ""
+            print(f"[账单-日期] 无法读回日期, 使用计算值: {selected_date}")
+
+        return selected_date
+    except Exception as e:
+        print(f"[账单-日期] 选择昨天日期失败: {e}")
+        return ""
 
 
 async def _pw_click(
@@ -420,6 +586,11 @@ async def export_single_bill(
     page, context = await browser_manager.get_page(
         crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
     )
+
+    # 0) Select yesterday's date range before exporting
+    selected_date = await _select_yesterday_date(page)
+    if not selected_date:
+        print("[账单] 日期选择失败，将使用页面默认日期范围导出")
 
     # 1) Click export button - this opens a new tab automatically
     export_selectors = [

@@ -10,7 +10,7 @@ import csv
 import io
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Request, HTTPException
@@ -98,8 +98,12 @@ def extract_home_data_from_dict(home_data: dict) -> dict:
     }
 
 
-def extract_marketing_from_csv(csv_text: str, data_date: str) -> dict:
-    """Extract marketing data from CSV string content."""
+def extract_marketing_from_csv(csv_text: str) -> dict:
+    """Extract marketing data from CSV string content.
+
+    The exported CSV already contains only yesterday's data (date selection
+    happens at export time), so no date filtering is needed here.
+    """
     if not csv_text:
         return {"评价有礼": 0.0, "跨店满返": 0.0}
 
@@ -108,9 +112,6 @@ def extract_marketing_from_csv(csv_text: str, data_date: str) -> dict:
     kuadian = 0.0
 
     for row in rows:
-        entry_time = row[1] if len(row) > 1 else ""
-        if data_date and not entry_time.startswith(data_date):
-            continue
         acct_type = row[2] if len(row) > 2 else ""
         expense = _parse_amount(row[4]) if len(row) > 4 else 0.0
         if acct_type == "评价有礼":
@@ -119,6 +120,26 @@ def extract_marketing_from_csv(csv_text: str, data_date: str) -> dict:
             kuadian += abs(expense)
 
     return {"评价有礼": pingjia, "跨店满返": kuadian}
+
+
+def _extract_date_from_bill_csv(csv_text: str) -> str:
+    """Extract the data date (YYYY-MM-DD) from the bill CSV's entry time column.
+
+    The bill CSV is already filtered to a single day at export time, so the
+    date from any row's "入账时间" column represents the data date.  This
+    avoids relying on the local system clock or scraped_at timestamps.
+
+    Returns '' if no valid date can be extracted.
+    """
+    if not csv_text:
+        return ""
+    _, rows = _read_csv_from_string(csv_text)
+    for row in rows:
+        entry_time = row[1] if len(row) > 1 else ""
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", entry_time)
+        if m:
+            return m.group(1)
+    return ""
 
 
 def extract_bill_from_csv(csv_text: str) -> dict:
@@ -184,16 +205,17 @@ def process_shop_data(
     """Process a single shop's data and return cleaned report."""
     home = extract_home_data_from_dict(home_data)
 
+    # Derive data_date from the bill CSV's entry time column (PDD server time).
+    # This avoids any dependency on the local system clock / timezone.
+    data_date = _extract_date_from_bill_csv(bill_csv or "")
+
     scraped_at = home.get("scraped_at", "")
     if scraped_at:
-        scraped_dt = datetime.fromisoformat(scraped_at)
-        data_date = (scraped_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-        collect_date = scraped_dt.strftime("%Y-%m-%d")
+        collect_date = scraped_at[:10]  # 'YYYY-MM-DD' prefix of ISO timestamp
     else:
-        data_date = ""
         collect_date = ""
 
-    marketing = extract_marketing_from_csv(marketing_csv or "", data_date)
+    marketing = extract_marketing_from_csv(marketing_csv or "")
     bill = extract_bill_from_csv(bill_csv or "")
 
     return {
