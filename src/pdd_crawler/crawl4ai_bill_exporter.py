@@ -22,6 +22,10 @@ import re
 from pdd_crawler import config
 
 
+class _NavRetryError(Exception):
+    """Sentinel exception to break out of try block into retry logic."""
+
+
 def _extract_and_cleanup(zip_path: Path) -> Path | None:
     """Extract zip file to same directory, delete zip, return first extracted file."""
     if not zip_path.exists():
@@ -324,70 +328,74 @@ async def _select_yesterday_date(
                 except Exception:
                     pass
         else:
-            # 4002 mode: no "昨天" button → navigate calendar to correct
-            # month, then double-click yesterday's date cell.
-            print("[账单-日期] 无'昨天'按钮, 使用日历双击模式 (4002模式)")
+            # 4002 mode: no "昨天" button → click yesterday's date cell in
+            # the calendar, then click "确认".
+            #
+            # The picker's default date (from the hidden input) tells us which
+            # month the calendar is currently displaying.  If yesterday is in
+            # the same month we can click the day directly.  If it's a
+            # different month we attempt to navigate, but if the calendar
+            # header is unreadable (Beast UI custom component) we use the
+            # picker input value to infer the displayed month instead.
+            print("[账单-日期] 无'昨天'按钮, 使用日历点击模式 (4002模式)")
 
-            # ── Navigate calendar to the correct month ──
-            # The calendar may show a different month (e.g. page defaults to
-            # month-start).  We need to click the prev-month arrow until the
-            # calendar header shows the target year-month.
-            target_ym = pdd_yesterday.strftime("%Y-%m")  # e.g. "2026-02"
-            max_month_clicks = 12  # safety limit
-            for _nav_i in range(max_month_clicks):
-                # Read the calendar header to determine displayed month.
-                # Common patterns: "2026年03月", "2026-03", "March 2026", etc.
-                header_text = ""
-                for header_sel in (
-                    '[class*="calendar"] [class*="header"]',
-                    '[class*="picker"] [class*="header"]',
-                    '[class*="month"]',
-                    "th[colspan]",
-                ):
-                    loc = page.locator(header_sel)
-                    if await loc.count() > 0:
-                        header_text = (await loc.first.inner_text()).strip()
-                        if header_text:
-                            break
+            # Determine the calendar's currently displayed month from the
+            # picker input value (which we already read above).
+            picker_month: date | None = None
+            if picker_date_str:
+                try:
+                    picker_month = datetime.strptime(
+                        picker_date_str, "%Y-%m-%d"
+                    ).date().replace(day=1)
+                except ValueError:
+                    pass
 
-                # Extract YYYY-MM from header (handles "2026年03月", "2026-03", etc.)
-                ym_match = re.search(r"(\d{4})\D*(\d{1,2})", header_text)
-                if ym_match:
-                    cal_ym = f"{ym_match.group(1)}-{int(ym_match.group(2)):02d}"
-                    print(f"[账单-日期] 日历当前显示: {cal_ym}, 目标: {target_ym}")
-                    if cal_ym == target_ym:
-                        break  # correct month displayed
-                else:
+            target_month = pdd_yesterday.replace(day=1)
+
+            # Navigate months if needed
+            if picker_month and picker_month != target_month:
+                # Calculate how many months to go back
+                months_diff = (
+                    (picker_month.year - target_month.year) * 12
+                    + picker_month.month - target_month.month
+                )
+                if months_diff > 0 and months_diff <= 12:
                     print(
-                        f"[账单-日期] 无法解析日历头部月份: '{header_text}', "
-                        f"尝试点击上一月"
+                        f"[账单-日期] 需要向前翻{months_diff}个月: "
+                        f"{picker_month.strftime('%Y-%m')} → "
+                        f"{target_month.strftime('%Y-%m')}"
                     )
-
-                # Click prev-month arrow
-                prev_clicked = False
-                for prev_sel in (
-                    '[class*="prev-month"]',
-                    '[class*="prev"][class*="btn"]',
-                    '[class*="calendar"] [class*="prev"]',
-                    '[class*="picker"] [class*="prev"]',
-                    'button[class*="prev"]',
-                    '[class*="header"] [class*="left"]',
-                    '[aria-label="prev month"]',
-                    '[aria-label="上一月"]',
-                ):
-                    loc = page.locator(prev_sel)
-                    if await loc.count() > 0:
-                        await loc.first.click()
-                        await _human_delay(0.3, 0.6)
-                        prev_clicked = True
-                        print("[账单-日期] 已点击上一月箭头")
-                        break
-
-                if not prev_clicked:
-                    print("[账单-日期] 未找到上一月按钮, 跳过月份导航")
-                    break
+                    nav_ok = True
+                    for _i in range(months_diff):
+                        prev_clicked = False
+                        for prev_sel in (
+                            '[class*="prev-month"]',
+                            '[class*="prev"][class*="btn"]',
+                            '[class*="calendar"] [class*="prev"]',
+                            '[class*="picker"] [class*="prev"]',
+                            'button[class*="prev"]',
+                            '[class*="header"] [class*="left"]',
+                            '[aria-label="prev month"]',
+                            '[aria-label="上一月"]',
+                        ):
+                            loc = page.locator(prev_sel)
+                            if await loc.count() > 0:
+                                await loc.first.click()
+                                await _human_delay(0.3, 0.6)
+                                prev_clicked = True
+                                break
+                        if not prev_clicked:
+                            print("[账单-日期] 未找到上一月按钮, 停止翻月")
+                            nav_ok = False
+                            break
+                    if nav_ok:
+                        print(f"[账单-日期] 已翻月{months_diff}次")
+                elif months_diff > 12:
+                    print(
+                        f"[账单-日期] 月份差距过大({months_diff}), 跳过翻月"
+                    )
             else:
-                print(f"[账单-日期] 翻月超过{max_month_clicks}次, 放弃")
+                print("[账单-日期] 日历已显示目标月份, 无需翻月")
 
             # ── Select the day cell ──
             day_str = str(pdd_yesterday.day)
@@ -413,7 +421,10 @@ async def _select_yesterday_date(
                     break
 
             if day_cell is None:
-                print(f"[账单-日期] 未在日历中找到昨天({day_str}号)的可点击单元格")
+                print(
+                    f"[账单-日期] 未在日历中找到昨天({day_str}号)"
+                    f"的可点击单元格"
+                )
                 return ""
 
             await day_cell.dblclick()
@@ -593,7 +604,8 @@ async def _navigate_to_bill_tab(
                 print(
                     f"[账单-导航] 第{attempt}次尝试, Step 1: SSO重定向未到达cashier: {sso_url}"
                 )
-                continue
+                # Fall through to retry logic below
+                raise _NavRetryError("SSO未到达cashier")
             print(
                 f"[账单-导航] 第{attempt}次尝试, Step 1: SSO完成, 已到达cashier: {sso_url}"
             )
@@ -626,7 +638,7 @@ async def _navigate_to_bill_tab(
                 print(
                     f"[账单-导航] 第{attempt}次尝试, Step 2: 未能停留在cashier域名: {final_url}"
                 )
-                continue
+                raise _NavRetryError("未停留在cashier域名")
 
             # ── Step 3: Verify no anti-bot block ──
             print(f"[账单-导航] 第{attempt}次尝试, Step 3: 验证页面正常: {final_url}")
@@ -637,19 +649,22 @@ async def _navigate_to_bill_tab(
                     body_text, final_url, f"bill_verify_attempt_{attempt}"
                 )
                 print(f"[账单-导航] 第{attempt}次尝试, Step 3: 页面疑似风控，准备重试")
-                continue
+                raise _NavRetryError("页面疑似风控")
 
             await _take_debug_screenshot(page, f"bill_success_attempt{attempt}", None)
             print(f"[账单-导航] ✅ 第{attempt}次尝试成功, 已到达账单页面: {final_url}")
             return True
 
+        except _NavRetryError:
+            pass  # handled below
         except Exception as e:
             print(f"[账单-导航] 第{attempt}次尝试异常: {e}")
-        finally:
-            if attempt < config.NAV_MAX_RETRIES:
-                backoff = config.NAV_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                print(f"[账单-导航] 第{attempt}次尝试失败，{backoff:.1f}s后重试")
-                await asyncio.sleep(backoff)
+
+        # ── Retry backoff (only reached on failure) ──
+        if attempt < config.NAV_MAX_RETRIES:
+            backoff = config.NAV_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            print(f"[账单-导航] 第{attempt}次尝试失败，{backoff:.1f}s后重试")
+            await asyncio.sleep(backoff)
 
     if last_page is not None:
         await _take_debug_screenshot(last_page, "bill_all_retries_failed", None)
