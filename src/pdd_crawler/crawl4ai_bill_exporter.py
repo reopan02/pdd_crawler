@@ -223,39 +223,77 @@ def _parse_date_from_picker_value(picker_value: str) -> str:
     return m.group(1) if m else ""
 
 
-async def _select_yesterday_date(page: Page) -> str:
+async def _select_yesterday_date(
+    page: Page, reference_today: date | None = None
+) -> str:
     """Select yesterday's date range in the cashier bill date picker.
 
     Supports two picker variants:
       - Tab 4001: has a "昨天" shortcut button → click it (auto-closes picker).
-      - Tab 4002: no "昨天" button → double-click yesterday's date cell in the
-        calendar, then click "确认".
+      - Tab 4002: no "昨天" button → navigate calendar to the correct month,
+        double-click yesterday's date cell, then click "确认".
 
-    Yesterday is determined from the PDD page's current date display (not from
-    the local system clock), avoiding timezone mismatches across deployments.
+    Yesterday is determined by the following priority:
+      1. ``reference_today`` — a trusted date obtained from a previous tab
+         (e.g. 4001's picker which always shows today).
+      2. The PDD page's current date display — but ONLY if it matches the
+         system date.  Some tabs (e.g. 4002) pre-fill a date that is NOT
+         today, which would produce a wrong "yesterday".
+      3. ``date.today()`` as a last resort.
 
     After the date is set, clicks "查询" to refresh the table.
+
+    Args:
+        page: Playwright page object.
+        reference_today: Trusted "today" date from a previous tab.  When
+            provided, the picker's own date is ignored for computing
+            yesterday (it is still read for logging).
 
     Returns:
         The YYYY-MM-DD date string that was selected (e.g. '2026-03-14'),
         or '' if selection failed.
     """
     try:
-        # ── Read PDD's "today" from the page's default date input ──
-        # The page loads with today's date pre-filled.  We parse it to derive
-        # yesterday without relying on the local system clock.
+        # ── Determine "today" reliably ──
+        # The picker value is NOT always today (4002 may show month-start).
+        # We trust: reference_today > picker (only if == system today) > system today.
         current_picker_value = await _read_picker_date(page)
-        pdd_today_str = _parse_date_from_picker_value(current_picker_value)
-        if pdd_today_str:
-            pdd_today = datetime.strptime(pdd_today_str, "%Y-%m-%d").date()
-            pdd_yesterday = pdd_today - timedelta(days=1)
+        picker_date_str = _parse_date_from_picker_value(current_picker_value)
+        system_today = date.today()
+
+        if reference_today is not None:
+            pdd_today = reference_today
             print(
-                f"[账单-日期] PDD页面当前日期: {pdd_today_str}, "
-                f"目标昨天: {pdd_yesterday.isoformat()}"
+                f"[账单-日期] 使用参考日期(4001): {pdd_today.isoformat()}"
+                f" (页面picker值: {picker_date_str or '无'})"
             )
+        elif picker_date_str:
+            picker_date = datetime.strptime(picker_date_str, "%Y-%m-%d").date()
+            if picker_date == system_today:
+                pdd_today = picker_date
+                print(
+                    f"[账单-日期] PDD页面当前日期: {picker_date_str}, "
+                    f"与系统日期一致, 使用此日期"
+                )
+            else:
+                pdd_today = system_today
+                print(
+                    f"[账单-日期] PDD页面日期: {picker_date_str} "
+                    f"≠ 系统日期: {system_today.isoformat()}, "
+                    f"picker值不可信, 使用系统日期"
+                )
         else:
-            pdd_yesterday = None
-            print("[账单-日期] 无法从页面读取当前日期, 将依赖快捷按钮")
+            pdd_today = system_today
+            print(
+                f"[账单-日期] 无法从页面读取日期, "
+                f"使用系统日期: {system_today.isoformat()}"
+            )
+
+        pdd_yesterday = pdd_today - timedelta(days=1)
+        print(
+            f"[账单-日期] 确定今天: {pdd_today.isoformat()}, "
+            f"目标昨天: {pdd_yesterday.isoformat()}"
+        )
 
         # 1) Click the date range input to open the picker
         date_input = page.locator('[data-testid="beast-core-rangePicker-htmlInput"]')
@@ -286,14 +324,73 @@ async def _select_yesterday_date(page: Page) -> str:
                 except Exception:
                     pass
         else:
-            # 4002 mode: no "昨天" button → double-click yesterday in calendar
-            if pdd_yesterday is None:
-                print("[账单-日期] 4002模式需要日期但无法从页面获取")
-                return ""
-
+            # 4002 mode: no "昨天" button → navigate calendar to correct
+            # month, then double-click yesterday's date cell.
             print("[账单-日期] 无'昨天'按钮, 使用日历双击模式 (4002模式)")
-            day_str = str(pdd_yesterday.day)
 
+            # ── Navigate calendar to the correct month ──
+            # The calendar may show a different month (e.g. page defaults to
+            # month-start).  We need to click the prev-month arrow until the
+            # calendar header shows the target year-month.
+            target_ym = pdd_yesterday.strftime("%Y-%m")  # e.g. "2026-02"
+            max_month_clicks = 12  # safety limit
+            for _nav_i in range(max_month_clicks):
+                # Read the calendar header to determine displayed month.
+                # Common patterns: "2026年03月", "2026-03", "March 2026", etc.
+                header_text = ""
+                for header_sel in (
+                    '[class*="calendar"] [class*="header"]',
+                    '[class*="picker"] [class*="header"]',
+                    '[class*="month"]',
+                    "th[colspan]",
+                ):
+                    loc = page.locator(header_sel)
+                    if await loc.count() > 0:
+                        header_text = (await loc.first.inner_text()).strip()
+                        if header_text:
+                            break
+
+                # Extract YYYY-MM from header (handles "2026年03月", "2026-03", etc.)
+                ym_match = re.search(r"(\d{4})\D*(\d{1,2})", header_text)
+                if ym_match:
+                    cal_ym = f"{ym_match.group(1)}-{int(ym_match.group(2)):02d}"
+                    print(f"[账单-日期] 日历当前显示: {cal_ym}, 目标: {target_ym}")
+                    if cal_ym == target_ym:
+                        break  # correct month displayed
+                else:
+                    print(
+                        f"[账单-日期] 无法解析日历头部月份: '{header_text}', "
+                        f"尝试点击上一月"
+                    )
+
+                # Click prev-month arrow
+                prev_clicked = False
+                for prev_sel in (
+                    '[class*="prev-month"]',
+                    '[class*="prev"][class*="btn"]',
+                    '[class*="calendar"] [class*="prev"]',
+                    '[class*="picker"] [class*="prev"]',
+                    'button[class*="prev"]',
+                    '[class*="header"] [class*="left"]',
+                    '[aria-label="prev month"]',
+                    '[aria-label="上一月"]',
+                ):
+                    loc = page.locator(prev_sel)
+                    if await loc.count() > 0:
+                        await loc.first.click()
+                        await _human_delay(0.3, 0.6)
+                        prev_clicked = True
+                        print("[账单-日期] 已点击上一月箭头")
+                        break
+
+                if not prev_clicked:
+                    print("[账单-日期] 未找到上一月按钮, 跳过月份导航")
+                    break
+            else:
+                print(f"[账单-日期] 翻月超过{max_month_clicks}次, 放弃")
+
+            # ── Select the day cell ──
+            day_str = str(pdd_yesterday.day)
             day_cell = None
             tables = page.locator("table")
             table_count = await tables.count()
@@ -565,7 +662,8 @@ async def export_single_bill(
     session_id: str,
     tab_url: str,
     output_dir: Path,
-) -> Path | None:
+    reference_today: date | None = None,
+) -> tuple[Path | None, date | None]:
     """Export a single tab bill and return downloaded/extracted file path.
 
     Flow:
@@ -573,13 +671,18 @@ async def export_single_bill(
     2. Click export button → new tab opens automatically to export history page
     3. In new tab, click download button (#downloadBalance-btn-0)
     4. Wait for file download and extract if ZIP
+
+    Returns:
+        A tuple of (downloaded_file_path, resolved_today_date).
+        The resolved_today_date can be passed to subsequent tabs as
+        ``reference_today`` so they don't rely on their own picker value.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     ok = await _navigate_to_bill_tab(crawler, session_id, tab_url)
     if not ok:
         print(f"⚠️ 反爬机制触发，跳过: {tab_url}")
-        return None
+        return None, None
 
     # Get Playwright page and context for subsequent operations
     browser_manager = crawler.crawler_strategy.browser_manager  # type: ignore[union-attr]
@@ -588,7 +691,18 @@ async def export_single_bill(
     )
 
     # 0) Select yesterday's date range before exporting
-    selected_date = await _select_yesterday_date(page)
+    selected_date = await _select_yesterday_date(page, reference_today)
+    # Derive the resolved "today" from the selected date so the caller can
+    # pass it to subsequent tabs.
+    resolved_today: date | None = None
+    if selected_date:
+        try:
+            resolved_today = (
+                datetime.strptime(selected_date, "%Y-%m-%d").date()
+                + timedelta(days=1)
+            )
+        except ValueError:
+            pass
     if not selected_date:
         print("[账单] 日期选择失败，将使用页面默认日期范围导出")
 
@@ -606,7 +720,7 @@ async def export_single_bill(
             clicked = await _pw_click(page, export_selectors, ["导出账单", "导出"])
             if not clicked:
                 print("[账单] 未找到导出按钮")
-                return None
+                return None, resolved_today
             print("[账单] 已点击导出按钮，等待新标签页打开...")
 
         new_page = await page_info.value
@@ -614,7 +728,7 @@ async def export_single_bill(
 
     except Exception as e:
         print(f"[账单] 等待新标签页失败: {e}")
-        return None
+        return None, resolved_today
 
     # Wait for the new page to load
     try:
@@ -643,14 +757,14 @@ async def export_single_bill(
             )
         except Exception as e:
             print(f"[账单] 导航到导出历史页失败: {e}")
-            return None
+            return None, resolved_today
 
     # Check for anti-bot blocking
     history_body = await new_page.evaluate("document.body.innerText || ''") or ""
     if _is_blocked(history_body, current_url):
         _log_blocked_reason(history_body, current_url, "export_history")
         print(f"⚠️ 导出记录页被拦截，跳过: {tab_url}")
-        return None
+        return None, resolved_today
 
     await _take_debug_screenshot(new_page, "export_history_page", output_dir)
 
@@ -685,7 +799,7 @@ async def export_single_bill(
 
             if not clicked_download:
                 print("[账单] 下载按钮未找到")
-                return None
+                return None, resolved_today
 
             print("[账单] 已点击下载按钮，等待下载完成...")
 
@@ -708,7 +822,7 @@ async def export_single_bill(
         )
         if not clicked_download:
             print("[账单] 下载按钮未找到")
-            return None
+            return None, resolved_today
 
         print("[账单] 已点击下载按钮，等待文件出现...")
 
@@ -720,15 +834,15 @@ async def export_single_bill(
 
         if downloaded_file is None:
             print("[账单] 下载超时")
-            return None
+            return None, resolved_today
 
     print(f"✅ 账单已下载: {downloaded_file}")
     if downloaded_file.suffix.lower() == ".zip":
         extracted = _extract_and_cleanup(downloaded_file)
         if extracted:
             print(f"✅ 已解压: {extracted}")
-            return extracted
-    return downloaded_file
+            return extracted, resolved_today
+    return downloaded_file, resolved_today
 
 
 async def export_all_bills(
@@ -738,6 +852,10 @@ async def export_all_bills(
     output_dir: Path,
 ) -> list[Path]:
     """Export bills from tab 4001 and 4002.
+
+    4001 is exported first; its resolved "today" date is passed to 4002 as
+    ``reference_today`` so that 4002 does not rely on its own (potentially
+    incorrect) picker default value.
 
     Notes:
         - `crawler` should be created with `BrowserConfig(accept_downloads=True,
@@ -749,17 +867,26 @@ async def export_all_bills(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded: list[Path] = []
+    reference_today: date | None = None  # populated by 4001, used by 4002
+
     for i, tab_url in enumerate(
         [config.CASHIER_BILL_4001_URL, config.CASHIER_BILL_4002_URL]
     ):
         # Use a unique session per tab to avoid contamination from blocked attempts
         tab_session_id = f"{session_id}_tab{i}"
         try:
-            result = await export_single_bill(
-                crawler, tab_session_id, tab_url, output_dir
+            file_path, resolved_today = await export_single_bill(
+                crawler, tab_session_id, tab_url, output_dir, reference_today
             )
-            if result is not None:
-                downloaded.append(result)
+            if file_path is not None:
+                downloaded.append(file_path)
+            # Capture the first tab's resolved date for subsequent tabs
+            if resolved_today is not None and reference_today is None:
+                reference_today = resolved_today
+                print(
+                    f"[账单] 4001确认今天日期: {reference_today.isoformat()}, "
+                    f"后续tab将使用此日期"
+                )
         except Exception as e:
             print(f"⚠️ 导出失败: {e}")
 
