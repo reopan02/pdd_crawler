@@ -735,16 +735,19 @@
 
         function App() {
             const [sessionId] = useState(getSessionId());
-            const [cookies, setCookies] = useState([]);
+            const [shops, setShops] = useState([]);
             const [tasks, setTasks] = useState([]);
             const [toasts, setToasts] = useState([]);
-            const [qrModal, setQrModal] = useState({ show: false, qrCode: null, status: '等待中...', taskId: null });
+            const [qrModal, setQrModal] = useState({ show: false, qrCode: null, status: '等待中...', taskId: null, shopId: null });
             const [previewImage, setPreviewImage] = useState(null);
             const [crawlStatus, setCrawlStatus] = useState({ running: false, progress: 0, message: '', taskId: null });
             const [cleanedReport, setCleanedReport] = useState(null);
+            const [logLines, setLogLines] = useState([]);
+            const logEndRef = useRef(null);
+            const logContainerRef = useRef(null);
 
-            // Updated Form states for multi-select
-            const [selectedCookies, setSelectedCookies] = useState([]);
+            // Section 2: shop selection for crawl
+            const [selectedShops, setSelectedShops] = useState([]);
             const [crawlOps, setCrawlOps] = useState({ scrape_home: true, export_bills: true });
 
             const eventSourceRef = useRef(null);
@@ -766,6 +769,10 @@
             });
             const [uploadDragover, setUploadDragover] = useState(false);
             const [uploadResult, setUploadResult] = useState(null);
+            const [showAddShopModal, setShowAddShopModal] = useState(false);
+            const [addShopForm, setAddShopForm] = useState({
+                shop_id: '', shop_name: '', cdp_url: '', vnc_url: '',
+            });
 
             const dataColumns = [
                 { key: 'data_date', label: '日期', group: '', editable: false },
@@ -779,6 +786,16 @@
                 { key: 'platform_refund', label: '平台返还', group: '营业费用', editable: true },
             ];
             const numericCols = dataColumns.filter(c => c.editable).map(c => c.key);
+
+            // Auto-scroll log panel only if user is near the bottom
+            useEffect(() => {
+                const el = logContainerRef.current;
+                if (!el) return;
+                const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+                if (atBottom && logEndRef.current) {
+                    logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+                }
+            }, [logLines]);
 
             const addToast = (message, type = 'success') => {
                 const id = Date.now();
@@ -1000,10 +1017,35 @@
                 });
             };
 
-            const fetchCookies = async () => {
+            const fetchShops = async () => {
                 try {
-                    const data = await apiFetch('/api/cookies');
-                    setCookies(data.cookies || []);
+                    const data = await apiFetch('/api/shops');
+                    setShops(data.shops || []);
+                } catch(e) {}
+            };
+
+            const submitAddShop = async () => {
+                const { shop_id, shop_name, cdp_url } = addShopForm;
+                if (!shop_id.trim() || !shop_name.trim() || !cdp_url.trim()) {
+                    addToast('店铺ID、名称、CDP地址为必填项', 'error');
+                    return;
+                }
+                try {
+                    await apiFetch('/api/shops', { method: 'POST', body: addShopForm });
+                    setShowAddShopModal(false);
+                    setAddShopForm({ shop_id: '', shop_name: '', cdp_url: '', vnc_url: '' });
+                    addToast('店铺添加成功');
+                    await fetchShops();
+                } catch(e) {}
+            };
+
+            const handleDeleteShop = async (shopId, shopName) => {
+                if (!confirm(`确定删除店铺「${shopName}」？删除后需重新添加。`)) return;
+                try {
+                    await apiFetch(`/api/shops/${shopId}`, { method: 'DELETE' });
+                    addToast('店铺已删除');
+                    setSelectedShops(prev => prev.filter(id => id !== shopId));
+                    await fetchShops();
                 } catch(e) {}
             };
 
@@ -1015,62 +1057,46 @@
             };
 
             useEffect(() => {
-                fetchCookies();
+                fetchShops();
                 fetchTasks();
                 fetchDataMeta();
             }, []);
 
-            // --- Section 1: Cookie Actions ---
-            const handleFileUpload = async (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const formData = new FormData();
-                formData.append('file', file);
+            // --- Section 1: Shop Actions ---
+            const handleValidateShop = async (shopId) => {
                 try {
-                    await apiFetch('/api/cookies/upload', { method: 'POST', body: formData });
-                    addToast('上传成功');
-                    fetchCookies();
-                } catch (e) {}
-                e.target.value = '';
-            };
-
-            const handleValidate = async (id) => {
-                try {
-                    await apiFetch(`/api/cookies/${id}/validate`, { method: 'POST' });
-                    addToast('验证任务已启动');
-                    fetchCookies();
+                    const res = await apiFetch(`/api/shops/${shopId}/validate`, { method: 'POST' });
+                    addToast(res.valid ? '验证通过 ✓' : '验证失败 — 需要重新登录', res.valid ? 'success' : 'error');
+                    fetchShops();
                 } catch (e) {}
             };
 
-            const handleDelete = async (id) => {
-                if (!confirm('确定删除该 Cookie 吗？')) return;
+            const handleValidateAll = async () => {
+                if (shops.length === 0) { addToast('没有可验证的店铺', 'error'); return; }
                 try {
-                    await apiFetch(`/api/cookies/${id}`, { method: 'DELETE' });
-                    addToast('已删除');
-                    fetchCookies();
-                    setSelectedCookies(prev => prev.filter(cId => cId !== id));
-                } catch (e) {}
-            };
+                    setLogLines([]);
+                    await apiFetch('/api/shops/validate-all', { method: 'POST' });
+                    addToast(`已启动 ${shops.length} 个店铺的验证`);
 
-            const handleRename = async (id, currentName) => {
-                const newName = prompt('输入新的店铺名称:', currentName);
-                if (newName === null || newName === currentName) return;
-                try {
-                    await apiFetch(`/api/cookies/${id}/rename`, { 
-                        method: 'POST', 
-                        body: { shop_name: newName } 
+                    const es = new EventSource(`/api/shops/validate-all/stream?session_id=${sessionId}`);
+                    es.addEventListener('log', (e) => {
+                        const data = JSON.parse(e.data);
+                        setLogLines(prev => [...prev, data.msg]);
                     });
-                    addToast('修改成功');
-                    fetchCookies();
+                    es.addEventListener('done', () => {
+                        es.close();
+                        fetchShops();
+                    });
+                    es.addEventListener('error', () => { es.close(); });
                 } catch (e) {}
             };
 
-            const startQrLogin = async () => {
+            const startQrLogin = async (shopId) => {
                 try {
-                    const { task_id } = await apiFetch('/api/qr-login/start', { method: 'POST' });
-                    setQrModal({ show: true, qrCode: null, status: '正在生成二维码...', taskId: task_id });
-                    
-                    const es = new EventSource(`/api/qr-login/${task_id}/stream?session_id=${sessionId}`);
+                    const { task_id } = await apiFetch(`/api/shops/${shopId}/login`, { method: 'POST' });
+                    setQrModal({ show: true, qrCode: null, status: '正在生成二维码...', taskId: task_id, shopId });
+
+                    const es = new EventSource(`/api/shops/${shopId}/login/${task_id}/stream?session_id=${sessionId}`);
                     eventSourceRef.current = es;
 
                     es.addEventListener('qr_code', (e) => {
@@ -1083,10 +1109,12 @@
                         setQrModal(prev => ({ ...prev, status: data.message || data.status }));
                     });
 
-                    es.addEventListener('completed', (e) => {
+                    es.addEventListener('completed', () => {
                         addToast('扫码登录成功');
                         closeQrModal();
-                        fetchCookies();
+                        fetchShops();
+                        // Auto-select this shop for batch crawl
+                        setSelectedShops(prev => prev.includes(shopId) ? prev : [...prev, shopId]);
                     });
 
                     es.addEventListener('error', (e) => {
@@ -1111,28 +1139,18 @@
             };
 
             // --- Section 2: Crawl Actions ---
-            const toggleCookieSelection = (cookieId) => {
-                setSelectedCookies(prev => {
-                    if (prev.includes(cookieId)) {
-                        return prev.filter(id => id !== cookieId);
-                    } else {
-                        return [...prev, cookieId];
-                    }
-                });
+            const toggleShopSelection = (shopId) => {
+                setSelectedShops(prev => prev.includes(shopId) ? prev.filter(id => id !== shopId) : [...prev, shopId]);
             };
 
-            const selectAllCookies = () => {
-                const validCookieIds = cookies.filter(c => c.status !== 'invalid').map(c => c.cookie_id);
-                if (selectedCookies.length === validCookieIds.length) {
-                    setSelectedCookies([]); // Deselect all
-                } else {
-                    setSelectedCookies(validCookieIds); // Select all
-                }
+            const selectAllShops = () => {
+                const allIds = shops.map(s => s.shop_id);
+                setSelectedShops(prev => prev.length === allIds.length ? [] : allIds);
             };
 
             const startCrawl = async () => {
-                if (selectedCookies.length === 0) {
-                    addToast('请至少选择一个 Cookie 账号', 'error');
+                if (selectedShops.length === 0) {
+                    addToast('请至少选择一个已登录的店铺', 'error');
                     return;
                 }
                 const ops = [];
@@ -1145,9 +1163,10 @@
                 try {
                     const { task_id } = await apiFetch('/api/crawl/start', {
                         method: 'POST',
-                        body: { cookie_ids: selectedCookies, operations: ops }
+                        body: { shop_ids: selectedShops, operations: ops }
                     });
                     setCrawlStatus({ running: true, progress: 0, message: '初始化...', taskId: task_id });
+                    setLogLines([]);
                     
                     const es = new EventSource(`/api/tasks/${task_id}/progress?session_id=${sessionId}`);
                     
@@ -1158,6 +1177,10 @@
                             progress: data.progress, 
                             message: data.message 
                         }));
+                    });
+                    es.addEventListener('log', (e) => {
+                        const data = JSON.parse(e.data);
+                        setLogLines(prev => [...prev, data.msg]);
                     });
                     es.addEventListener('completed', async (e) => {
                         const data = JSON.parse(e.data);
@@ -1200,8 +1223,20 @@
                             ? data.report
                             : [data.report];
                     setCleanedReport(reports);
-                    addToast(silent ? '已自动清洗并入库' : '清洗成功');
-                    // Refresh data management after auto-import
+                    addToast('清洗完成，请确认后入库');
+                } catch (e) {}
+            };
+
+            const confirmImportReports = async () => {
+                if (!cleanedReport) return;
+                const reports = Array.isArray(cleanedReport) ? cleanedReport : [cleanedReport];
+                try {
+                    const data = await apiFetch('/api/data/import-reports', {
+                        method: 'POST',
+                        body: { reports }
+                    });
+                    addToast(`已入库 ${data.imported} 条数据`);
+                    setCleanedReport(null);
                     await fetchDataMeta();
                     if (selectedMonth) await fetchDataRows(selectedDataShops, selectedMonth);
                 } catch (e) {}
@@ -1246,69 +1281,53 @@
                         <nav>
                             <div className="logo">PDD Crawler</div>
                             <div className="nav-links">
-                                <a href="#cookies">Cookie</a>
+                                <a href="#cookies">店铺</a>
                                 <a href="#crawl">采集</a>
                                 <a href="#data">数据</a>
                             </div>
                         </nav>
                     </header>
 
-                    {/* Section 1: Cookie 管理 */}
+                    {/* Section 1: 店铺管理 */}
                     <section id="cookies">
                         <div className="section-title">
-                            <span>1. Cookie 账号管理</span>
+                            <span>1. 店铺管理</span>
                             <div className="flex gap-12">
-                                <input 
-                                    type="file" 
-                                    id="cookieUpload" 
-                                    style={{display: 'none'}} 
-                                    onChange={handleFileUpload} 
-                                    accept=".json"
-                                />
-                                <button className="btn btn-sm" onClick={() => document.getElementById('cookieUpload').click()}>上传 JSON</button>
-                                <button className="btn btn-primary btn-sm" onClick={startQrLogin}>+ 扫码登录</button>
+                                <button className="btn btn-sm btn-primary" onClick={() => setShowAddShopModal(true)}>+ 添加店铺</button>
+                                <button className="btn btn-sm" onClick={handleValidateAll}>全部验证</button>
+                                <button className="btn btn-sm" onClick={fetchShops}>刷新状态</button>
                             </div>
                         </div>
-                        <div className="card">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>店铺名称</th>
-                                        <th>状态</th>
-                                        <th>Cookie 数量</th>
-                                        <th className="text-right">操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {cookies.length === 0 ? (
-                                        <tr><td colSpan="4" className="empty-state">暂无数据，请扫码登录或上传 Cookie</td></tr>
-                                    ) : cookies.map(c => (
-                                        <tr key={c.cookie_id}>
-                                            <td className="mono" style={{fontWeight: 500}}>
-                                                <span 
-                                                    style={{cursor: 'pointer', padding: '4px 0', borderBottom: '1px dashed var(--border-color)'}}
-                                                    onClick={() => handleRename(c.cookie_id, c.shop_name)}
-                                                    title="点击修改店铺名称"
-                                                >
-                                                    {c.shop_name || '未命名店铺'}
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <span className={`badge badge-${c.status}`}>
-                                                    {c.status === 'valid' ? '有效' : c.status === 'invalid' ? '失效' : c.status === 'validating' ? '验证中' : '未知'}
-                                                </span>
-                                            </td>
-                                            <td className="mono text-secondary">{c.cookie_count}</td>
-                                            <td className="text-right">
-                                                <div className="flex gap-12 justify-end">
-                                                    <button className="btn btn-sm" onClick={() => handleValidate(c.cookie_id)}>验证</button>
-                                                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(c.cookie_id)}>删除</button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                        <div className="multi-select-grid" style={{marginBottom: '24px'}}>
+                            {shops.length === 0 ? (
+                                <div className="empty-state" style={{gridColumn: '1 / -1', padding: '40px'}}>暂无店铺，点击右上角「+ 添加店铺」开始配置</div>
+                            ) : shops.map(s => (
+                                <div key={s.shop_id} className="account-card" style={{flexDirection: 'column', alignItems: 'stretch', cursor: 'default', position: 'relative'}}>
+                                    <div className="flex items-center justify-between" style={{marginBottom: '12px'}}>
+                                        <span className="account-name">{s.shop_name}</span>
+                                        <span className={`badge ${s.logged_in ? 'badge-valid' : s.connected ? 'badge-unknown' : 'badge-invalid'}`}>
+                                            {s.logged_in ? '已登录' : s.connected ? '已连接' : '未连接'}
+                                        </span>
+                                    </div>
+                                    <div className="flex gap-12" style={{marginTop: '4px'}}>
+                                        <button className="btn btn-sm btn-primary" onClick={() => startQrLogin(s.shop_id)} style={{flex: 1}}>
+                                            {s.logged_in ? '重新登录' : '扫码登录'}
+                                        </button>
+                                        <button className="btn btn-sm" onClick={() => handleValidateShop(s.shop_id)}>验证</button>
+                                    </div>
+                                    {s.vnc_url && (
+                                        <a href={s.vnc_url} target="_blank" rel="noopener" style={{fontSize: '11px', color: 'var(--text-secondary)', marginTop: '8px', textDecoration: 'none'}}>
+                                            VNC: {s.vnc_url}
+                                        </a>
+                                    )}
+                                    <button
+                                        className="btn-icon"
+                                        title="删除店铺"
+                                        onClick={() => handleDeleteShop(s.shop_id, s.shop_name)}
+                                        style={{position: 'absolute', top: '8px', right: '8px', fontSize: '12px', color: 'var(--text-secondary)'}}
+                                    >✕</button>
+                                </div>
+                            ))}
                         </div>
                     </section>
 
@@ -1318,29 +1337,31 @@
                         <div className="card">
                             <div className="form-group">
                                 <div className="flex justify-between items-center mb-16">
-                                    <label style={{marginBottom: 0}}>选择要采集的店铺 ({selectedCookies.length} / {cookies.filter(c => c.status !== 'invalid').length})</label>
-                                    <button className="btn btn-sm" onClick={selectAllCookies}>全选 / 反选</button>
+                                    <label style={{marginBottom: 0}}>选择要采集的店铺 ({selectedShops.length} / {shops.length})</label>
+                                    <button className="btn btn-sm" onClick={selectAllShops}>全选 / 反选</button>
                                 </div>
                                 <div className="multi-select-grid">
-                                    {cookies.filter(c => c.status !== 'invalid').length === 0 ? (
-                                        <div className="empty-state" style={{gridColumn: '1 / -1', padding: '20px'}}>没有可用的有效账号</div>
-                                    ) : cookies.filter(c => c.status !== 'invalid').map(c => {
-                                        const isSelected = selectedCookies.includes(c.cookie_id);
+                                    {shops.length === 0 ? (
+                                        <div className="empty-state" style={{gridColumn: '1 / -1', padding: '20px'}}>暂无店铺，请先在上方添加</div>
+                                    ) : shops.map(s => {
+                                        const isSelected = selectedShops.includes(s.shop_id);
+                                        const notLoggedIn = !s.logged_in;
                                         return (
                                             <div 
-                                                key={c.cookie_id} 
+                                                key={s.shop_id} 
                                                 className={`account-card ${isSelected ? 'selected' : ''}`}
-                                                onClick={() => toggleCookieSelection(c.cookie_id)}
+                                                style={notLoggedIn ? {opacity: 0.55} : {}}
+                                                onClick={() => toggleShopSelection(s.shop_id)}
                                             >
                                                 <input 
                                                     type="checkbox" 
                                                     checked={isSelected}
-                                                    onChange={() => {}} // Handle click on the card instead
-                                                    onClick={(e) => e.stopPropagation()} // Prevent double toggle
+                                                    onChange={() => {}}
+                                                    onClick={(e) => e.stopPropagation()}
                                                 />
                                                 <div className="account-info">
-                                                    <span className="account-name">{c.shop_name}</span>
-                                                    <span className="account-status">状态: {c.status === 'valid' ? '有效' : '未验证'}</span>
+                                                    <span className="account-name">{s.shop_name}</span>
+                                                    <span className="account-status">{s.logged_in ? '已登录 ✓' : '未登录'}</span>
                                                 </div>
                                             </div>
                                         );
@@ -1388,8 +1409,80 @@
                                     </div>
                                 </div>
                             )}
+
+                            {/* Real-time log panel */}
+                            {logLines.length > 0 && (
+                                <div className="mt-24">
+                                    <div className="flex justify-between items-center" style={{marginBottom: '8px'}}>
+                                        <span style={{fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)'}}>实时日志</span>
+                                        <button className="btn btn-sm" onClick={() => setLogLines([])} style={{fontSize: '12px', padding: '2px 8px'}}>清空</button>
+                                    </div>
+                                    <div ref={logContainerRef} style={{
+                                        background: '#1a1a2e', color: '#a0e7a0', fontFamily: 'monospace',
+                                        fontSize: '12px', lineHeight: '1.6', padding: '12px 16px',
+                                        borderRadius: '8px', maxHeight: '300px', overflowY: 'auto',
+                                        whiteSpace: 'pre-wrap', wordBreak: 'break-all'
+                                    }}>
+                                        {logLines.map((line, i) => (
+                                            <div key={i} style={{color: line.includes('✗') ? '#ff6b6b' : line.includes('✓') ? '#a0e7a0' : '#d4d4d4'}}>{line}</div>
+                                        ))}
+                                        <div ref={logEndRef} />
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </section>
+
+                    {/* Cleaned Report Preview — requires confirmation before import */}
+                    {cleanedReport && cleanedReport.length > 0 && (
+                        <div className="card" style={{border: '2px solid var(--accent-yellow)', background: 'rgba(245,158,11,0.03)'}}>
+                            <div className="flex justify-between items-center" style={{marginBottom: '16px'}}>
+                                <div>
+                                    <span style={{fontWeight: 600, fontSize: '16px'}}>清洗结果预览</span>
+                                    <span style={{fontSize: '13px', color: 'var(--text-secondary)', marginLeft: '12px'}}>
+                                        共 {cleanedReport.length} 条数据，请确认后入库
+                                    </span>
+                                </div>
+                                <div className="flex gap-12">
+                                    <button className="btn btn-sm" onClick={downloadReport}>下载 JSON</button>
+                                    <button className="btn btn-sm btn-primary" onClick={confirmImportReports}>确认入库</button>
+                                    <button className="btn btn-sm" onClick={() => setCleanedReport(null)} style={{color: 'var(--text-secondary)'}}>取消</button>
+                                </div>
+                            </div>
+                            <div style={{overflowX: 'auto'}}>
+                                <table style={{fontSize: '13px'}}>
+                                    <thead>
+                                        <tr>
+                                            <th>店铺</th>
+                                            <th>日期</th>
+                                            <th>成交金额</th>
+                                            <th>全站推广</th>
+                                            <th>营销费用</th>
+                                            <th>技术服务费</th>
+                                            <th>售后费用</th>
+                                            <th>其他费用</th>
+                                            <th>平台返还</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {cleanedReport.map((r, i) => (
+                                            <tr key={i}>
+                                                <td style={{fontWeight: 500}}>{r['店铺名称']}</td>
+                                                <td>{r['数据日期']}</td>
+                                                <td style={{fontVariantNumeric: 'tabular-nums'}}>{Number(r['成交金额'] || 0).toFixed(2)}</td>
+                                                <td style={{fontVariantNumeric: 'tabular-nums'}}>{Number(r['全站推广'] || 0).toFixed(2)}</td>
+                                                <td style={{fontVariantNumeric: 'tabular-nums'}}>{Number(r['评价有礼+跨店满返（营销账户导出）'] || 0).toFixed(2)}</td>
+                                                <td style={{fontVariantNumeric: 'tabular-nums'}}>{Number(r['技术服务费（支出+返还净额）'] || 0).toFixed(2)}</td>
+                                                <td style={{fontVariantNumeric: 'tabular-nums'}}>{Number(r['售后费用（扣款中售后+其他中售后）'] || 0).toFixed(2)}</td>
+                                                <td style={{fontVariantNumeric: 'tabular-nums'}}>{Number(r['其他费用（排除技术服务费和售后后的剩余）'] || 0).toFixed(2)}</td>
+                                                <td style={{fontVariantNumeric: 'tabular-nums'}}>{Number(r['平台返还（维权）'] || 0).toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Section 3: 数据管理 */}
                     <section id="data">
@@ -1568,6 +1661,29 @@
                     )}
 
 
+
+                    {/* Add Shop Modal */}
+                    {showAddShopModal && (
+                        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowAddShopModal(false); }}>
+                            <div className="modal" style={{width: 'min(90vw, 520px)', textAlign: 'left'}}>
+                                <h2 style={{marginBottom: '20px', fontSize: '20px', fontWeight: 600}}>添加店铺</h2>
+                                <div className="form-grid">
+                                    <label>店铺 ID</label>
+                                    <input value={addShopForm.shop_id} onChange={(e) => setAddShopForm({...addShopForm, shop_id: e.target.value})} placeholder="如 shop2（唯一标识）" />
+                                    <label>店铺名称</label>
+                                    <input value={addShopForm.shop_name} onChange={(e) => setAddShopForm({...addShopForm, shop_name: e.target.value})} placeholder="如 我的店铺" />
+                                    <label>CDP 地址</label>
+                                    <input value={addShopForm.cdp_url} onChange={(e) => setAddShopForm({...addShopForm, cdp_url: e.target.value})} placeholder="如 http://localhost:9223" />
+                                    <label>VNC 地址</label>
+                                    <input value={addShopForm.vnc_url} onChange={(e) => setAddShopForm({...addShopForm, vnc_url: e.target.value})} placeholder="如 http://localhost:6081（可选）" />
+                                </div>
+                                <div className="modal-actions">
+                                    <button className="btn btn-sm" onClick={() => setShowAddShopModal(false)}>取消</button>
+                                    <button className="btn btn-sm btn-primary" onClick={submitAddShop}>确认添加</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* QR Login Modal */}
                     {qrModal.show && (

@@ -1,10 +1,10 @@
-"""Bill exporter using crawl4ai (no Selenium).
+"""Bill exporter — exports cashier bills via Playwright Page (CDP).
 
 Exports cashier bills for tab 4001/4002, downloads files to the configured
 downloads directory, and auto-extracts ZIP files.
-"""
 
-# pyright: reportMissingImports=false, reportMissingTypeStubs=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportUnusedCallResult=false, reportDeprecated=false, reportAttributeAccessIssue=false
+All functions accept a Playwright Page object directly (no crawl4ai).
+"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+import aiohttp
 from playwright.async_api import Page
 
 import re
@@ -22,9 +22,93 @@ import re
 from pdd_crawler import config
 
 
+async def _download_file_direct(
+    url: str,
+    cookies: list[dict],
+    output_path: Path,
+) -> bool:
+    """Download file directly using aiohttp with cookies from Playwright.
+    
+    This is a workaround for Playwright's download.save_as() returning 0 bytes
+    in Docker Chrome environments.
+    """
+    try:
+        # Build cookie dict for aiohttp
+        cookie_dict = {c["name"]: c["value"] for c in cookies}
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://cashier.pinduoduo.com/",
+        }
+        
+        async with aiohttp.ClientSession(cookies=cookie_dict, headers=headers) as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                if resp.status != 200:
+                    print(f"[账单] 直接下载失败，HTTP状态码: {resp.status}")
+                    return False
+                
+                data = await resp.read()
+                if len(data) == 0:
+                    print("[账单] 直接下载返回空内容")
+                    return False
+                
+                output_path.write_bytes(data)
+                print(f"[账单] 直接下载成功: {output_path} ({len(data)} bytes)")
+                return True
+                
+    except Exception as e:
+        print(f"[账单] 直接下载失败: {e}")
+        return False
+
+
+def _is_valid_zip(zip_path: Path) -> bool:
+    """Check if file is a valid ZIP file by checking magic bytes."""
+    if not zip_path.exists() or zip_path.stat().st_size < 4:
+        return False
+    try:
+        with open(zip_path, "rb") as f:
+            magic = f.read(4)
+        # ZIP files start with PK\x03\x04 or PK\x05\x06 or PK\x07\x08
+        return magic.startswith(b"PK")
+    except Exception:
+        return False
+
+
+def _read_file_head(zip_path: Path, max_bytes: int = 500) -> str:
+    """Read beginning of file for debugging (to detect HTML error pages)."""
+    try:
+        with open(zip_path, "rb") as f:
+            data = f.read(max_bytes)
+        # Try UTF-8 first, then latin-1
+        for encoding in ("utf-8", "latin-1", "gbk"):
+            try:
+                return data.decode(encoding, errors="replace")
+            except Exception:
+                continue
+        return data.hex()[:100]
+    except Exception as e:
+        return f"<无法读取: {e}>"
+
+
 def _extract_and_cleanup(zip_path: Path) -> Path | None:
     """Extract zip file to same directory, delete zip, return first extracted file."""
     if not zip_path.exists():
+        return None
+
+    # Validate ZIP format before attempting extraction
+    if not _is_valid_zip(zip_path):
+        file_head = _read_file_head(zip_path)
+        print(f"[账单] ⚠️ 文件不是有效的ZIP格式: {zip_path.name}")
+        print(f"[账单] 文件头内容: {file_head[:200]}...")
+        # Check if it's an HTML error page
+        if "<html" in file_head.lower() or "<!doctype" in file_head.lower():
+            print(f"[账单] ❌ 下载的是HTML页面而非ZIP文件，可能是登录过期或风控拦截")
+        # Clean up invalid file
+        try:
+            zip_path.unlink()
+            print(f"[账单] 已删除无效文件: {zip_path.name}")
+        except Exception:
+            pass
         return None
 
     extract_dir = zip_path.parent
@@ -38,30 +122,13 @@ def _extract_and_cleanup(zip_path: Path) -> Path | None:
             return extract_dir / extracted_files[0]
     except Exception as e:
         print(f"[账单] 解压失败: {e}")
+        # Clean up corrupted file
+        try:
+            zip_path.unlink()
+        except Exception:
+            pass
 
     return None
-
-
-def _result_text(result: object) -> str:
-    """Best-effort conversion from crawler result to text."""
-    if result is None:
-        return ""
-    if isinstance(result, str):
-        return result
-
-    extracted = getattr(result, "extracted_content", None)
-    if isinstance(extracted, str) and extracted:
-        return extracted
-
-    markdown = getattr(result, "markdown", None)
-    if isinstance(markdown, str) and markdown:
-        return markdown
-
-    html = getattr(result, "html", None)
-    if isinstance(html, str) and html:
-        return html
-
-    return str(result)
 
 
 def _is_blocked(body: str, url: str) -> bool:
@@ -71,15 +138,10 @@ def _is_blocked(body: str, url: str) -> bool:
     matched = [t for t in config.BLOCKED_TEXTS if t in body]
     if not matched:
         return False
-    # Short pages with blocked text are definitely blocked (error/challenge pages)
     if len(body.strip()) < 1000:
         return True
-    # Multiple blocked keywords strongly indicate an error page
     if len(matched) >= 2:
         return True
-    # Single-keyword matches: only flag unambiguous error indicators
-    # "关闭页面后重试" and "登录异常" only appear on error pages
-    # "访问异常" and "验证身份" could appear in normal dashboard menus
     return any(kw in matched for kw in ["关闭页面后重试", "登录异常"])
 
 
@@ -106,33 +168,18 @@ async def _human_delay(lo: float = 1.0, hi: float = 2.5) -> None:
 
 
 async def _take_debug_screenshot(
-    page, step_name: str, output_dir: Path | None = None
+    page: Page, step_name: str, output_dir: Path | None = None
 ) -> Path | None:
-    """Take a debug screenshot and save it to the output directory.
-
-    Args:
-        page: Playwright page object.
-        step_name: Name of the navigation step for the filename.
-        output_dir: Base output directory. If None, uses config.PROJECT_ROOT / "output" / "debug".
-
-    Returns:
-        Path to the saved screenshot file, or None if screenshot failed.
-    """
+    """Take a debug screenshot and save it to the output directory."""
     try:
-        # Determine output directory
         if output_dir is None:
             debug_dir = config.PROJECT_ROOT / "output" / "debug"
         else:
             debug_dir = output_dir / "debug"
 
-        # Create debug directory if it doesn't exist
         debug_dir.mkdir(parents=True, exist_ok=True)
-
-        # Generate timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         screenshot_path = debug_dir / f"nav_{step_name}_{timestamp}.png"
-
-        # Take screenshot
         await page.screenshot(path=screenshot_path)
         return screenshot_path
     except Exception as e:
@@ -140,25 +187,15 @@ async def _take_debug_screenshot(
         return None
 
 
-async def _dismiss_popups(page) -> None:
-    """Dismiss common PDD popups/modals by clicking close buttons.
-
-    Tries multiple selector patterns and text-based matching for close buttons.
-    Best effort approach - never crashes.
-
-    Args:
-        page: Playwright page object.
-    """
+async def _dismiss_popups(page: Page) -> None:
+    """Dismiss common PDD popups/modals by clicking close buttons."""
     try:
-        # CSS selectors for common close buttons
         close_selectors = [
             '[class*="modal"] [class*="close"]',
             '[class*="dialog"] [class*="close"]',
             '[class*="overlay"] [class*="close"]',
             ".ant-modal-close",
         ]
-
-        # Try each selector
         for selector in close_selectors:
             try:
                 element = await page.query_selector(selector)
@@ -170,7 +207,6 @@ async def _dismiss_popups(page) -> None:
             except Exception:
                 continue
 
-        # Try text-based matching for Chinese close buttons
         close_texts = ["关闭", "我知道了", "稍后再说"]
         buttons = await page.query_selector_all("button, a, span, div")
         for button in buttons:
@@ -185,20 +221,13 @@ async def _dismiss_popups(page) -> None:
                     return
             except Exception:
                 continue
-    except Exception as e:
-        # Best effort - never crash the caller
+    except Exception:
         pass
 
 
 async def _read_picker_date(page: Page) -> str:
-    """Read the current date string from the date range input on the page.
-
-    Returns the raw value like '2026-03-14 00:00:00 ~ 2026-03-14 23:59:59',
-    or '' if not found.
-    """
-    for selector in (
-        '[data-testid="beast-core-rangePicker-htmlInput"]',
-    ):
+    """Read the current date string from the date range input on the page."""
+    for selector in ('[data-testid="beast-core-rangePicker-htmlInput"]',):
         loc = page.locator(selector)
         if await loc.count() > 0:
             val = await loc.first.input_value()
@@ -214,11 +243,7 @@ async def _read_picker_date(page: Page) -> str:
 
 
 def _parse_date_from_picker_value(picker_value: str) -> str:
-    """Extract a YYYY-MM-DD date from the picker input value.
-
-    The value looks like '2026-03-15 00:00:00 ~ 2026-03-15 23:59:59'.
-    Returns the first date found, e.g. '2026-03-15', or '' on failure.
-    """
+    """Extract a YYYY-MM-DD date from the picker input value."""
     m = re.search(r"(\d{4}-\d{2}-\d{2})", picker_value)
     return m.group(1) if m else ""
 
@@ -226,37 +251,8 @@ def _parse_date_from_picker_value(picker_value: str) -> str:
 async def _select_yesterday_date(
     page: Page, reference_today: date | None = None
 ) -> str:
-    """Select yesterday's date range in the cashier bill date picker.
-
-    Supports two picker variants:
-      - Tab 4001: has a "昨天" shortcut button → click it (auto-closes picker).
-      - Tab 4002: no "昨天" button → navigate calendar to the correct month,
-        double-click yesterday's date cell, then click "确认".
-
-    Yesterday is determined by the following priority:
-      1. ``reference_today`` — a trusted date obtained from a previous tab
-         (e.g. 4001's picker which always shows today).
-      2. The PDD page's current date display — but ONLY if it matches the
-         system date.  Some tabs (e.g. 4002) pre-fill a date that is NOT
-         today, which would produce a wrong "yesterday".
-      3. ``date.today()`` as a last resort.
-
-    After the date is set, clicks "查询" to refresh the table.
-
-    Args:
-        page: Playwright page object.
-        reference_today: Trusted "today" date from a previous tab.  When
-            provided, the picker's own date is ignored for computing
-            yesterday (it is still read for logging).
-
-    Returns:
-        The YYYY-MM-DD date string that was selected (e.g. '2026-03-14'),
-        or '' if selection failed.
-    """
+    """Select yesterday's date range in the cashier bill date picker."""
     try:
-        # ── Determine "today" reliably ──
-        # The picker value is NOT always today (4002 may show month-start).
-        # We trust: reference_today > picker (only if == system today) > system today.
         current_picker_value = await _read_picker_date(page)
         picker_date_str = _parse_date_from_picker_value(current_picker_value)
         system_today = date.today()
@@ -315,7 +311,6 @@ async def _select_yesterday_date(
             await _human_delay(0.5, 1.0)
             print("[账单-日期] 已点击'昨天'快捷按钮 (4001模式)")
 
-            # Click "确认" if picker is still open
             confirm_btn = page.locator("button:has-text('确认')")
             if await confirm_btn.count() > 0:
                 try:
@@ -324,27 +319,17 @@ async def _select_yesterday_date(
                 except Exception:
                     pass
         else:
-            # 4002 mode: no "昨天" button → set date via JS injection.
-            # The calendar UI is a custom Beast component whose DOM structure
-            # is unpredictable (header selectors return empty, month navigation
-            # is unreliable).  Instead we directly set the hidden input value
-            # and trigger React's change pipeline.
+            # 4002 mode: JS injection
             print("[账单-日期] 无'昨天'按钮, 使用JS注入模式 (4002模式)")
-
-            # Close the picker popup first (Escape key)
             await page.keyboard.press("Escape")
             await _human_delay(0.3, 0.6)
 
-            yesterday_str = pdd_yesterday.isoformat()  # e.g. "2026-03-15"
-            target_value = (
-                f"{yesterday_str} 00:00:00 ~ {yesterday_str} 23:59:59"
-            )
+            yesterday_str = pdd_yesterday.isoformat()
+            target_value = f"{yesterday_str} 00:00:00 ~ {yesterday_str} 23:59:59"
 
-            # Find the date input element
             input_sel = '[data-testid="beast-core-rangePicker-htmlInput"]'
             input_loc = page.locator(input_sel)
             if await input_loc.count() == 0:
-                # Fallback selectors
                 for ph in ("开始日期-结束日期", "请选择时间范围"):
                     input_loc = page.get_by_placeholder(ph)
                     if await input_loc.count() > 0:
@@ -354,11 +339,8 @@ async def _select_yesterday_date(
                 print("[账单-日期] 4002模式: 未找到日期输入框")
                 return ""
 
-            # Set value via JS and trigger React change events.
-            # React overrides the native value setter, so we must use the
-            # native HTMLInputElement.prototype setter to bypass it, then
-            # dispatch 'input' and 'change' events.
-            js_set_date = """
+            js_set_date = (
+                """
                 (el) => {
                     const nativeSetter = Object.getOwnPropertyDescriptor(
                         window.HTMLInputElement.prototype, 'value'
@@ -367,13 +349,13 @@ async def _select_yesterday_date(
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                 }
-            """ % target_value
+            """
+                % target_value
+            )
 
             await input_loc.first.evaluate(js_set_date)
             await _human_delay(0.5, 1.0)
-            print(
-                f"[账单-日期] 已通过JS设置日期输入值: {target_value}"
-            )
+            print(f"[账单-日期] 已通过JS设置日期输入值: {target_value}")
 
         # 3) Click "查询" to apply the date filter
         query_btn = page.locator("button:has-text('查询')")
@@ -384,13 +366,12 @@ async def _select_yesterday_date(
         else:
             print("[账单-日期] 未找到'查询'按钮")
 
-        # 4) Read back the actual selected date from the input
+        # 4) Read back the actual selected date
         final_value = await _read_picker_date(page)
         selected_date = _parse_date_from_picker_value(final_value)
         if selected_date:
             print(f"[账单-日期] 最终选中日期: {selected_date}")
         else:
-            # Fallback: use the computed yesterday
             selected_date = pdd_yesterday.isoformat() if pdd_yesterday else ""
             print(f"[账单-日期] 无法读回日期, 使用计算值: {selected_date}")
 
@@ -406,21 +387,7 @@ async def _pw_click(
     texts: list[str],
     timeout_ms: int = 5000,
 ) -> bool:
-    """Click element using Playwright native API.
-
-    Priority:
-        1. Try CSS selector (e.g., #exportBalance-btn)
-        2. Fall back to button:has-text('...') text matching
-
-    Args:
-        page: Playwright Page object
-        selectors: List of CSS selectors to try first
-        texts: List of text patterns to match as fallback
-        timeout_ms: Timeout for waiting for element
-
-    Returns:
-        True if click succeeded, False otherwise
-    """
+    """Click element using Playwright native API."""
     for selector in selectors:
         try:
             locator = page.locator(selector)
@@ -488,36 +455,20 @@ async def _wait_for_new_download(
 
 
 async def _navigate_to_bill_tab(
-    crawler: AsyncWebCrawler,
-    session_id: str,
+    page: Page,
     tab_url: str,
 ) -> bool:
-    """Navigate to cashier bill tab via mms SSO proxy.
+    """Navigate to cashier bill tab via MMS SSO proxy.
 
-    Direct access to cashier.pinduoduo.com triggers "登录异常" because
-    the cashier domain requires its own session established via an SSO
-    ticket from mms.  The correct flow is:
-
+    Flow:
       1. Navigate to mms.pinduoduo.com/cashier/finance/payment-bills
-         (the mms-side proxy page for cashier).
-      2. mms server generates an auth ticket and the page redirects to
-         cashier.pinduoduo.com/main/auth?ticket=<hex> which validates
-         the ticket via /sherlock/api/auth/checkTicketV2 and sets
-         cashier session cookies.
-      3. The page finally lands on cashier with a valid session.
-      4. Once the session is established we can navigate to any cashier
-         tab URL directly.
+      2. MMS generates auth ticket → redirects to cashier.pinduoduo.com/main/auth?ticket=...
+      3. cashier validates ticket and sets session cookies
+      4. Navigate to the specific bill tab URL
     """
-    last_page = None
-
     for attempt in range(1, config.NAV_MAX_RETRIES + 1):
         try:
-            page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(  # type: ignore[union-attr]
-                crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
-            )
-            last_page = page
-
-            # ── Step 1: Navigate through mms proxy to establish cashier session via SSO ticket ──
+            # ── Step 1: SSO via MMS proxy ──
             print(
                 f"[账单-导航] 第{attempt}次尝试, Step 1: 通过mms代理页建立cashier会话 (SSO)"
             )
@@ -551,7 +502,6 @@ async def _navigate_to_bill_tab(
             await _take_debug_screenshot(page, f"cashier_sso_attempt{attempt}", None)
 
             # ── Step 2: Navigate to the specific bill tab ──
-            # If we already landed on the target tab, skip the extra navigation.
             if tab_url in sso_url:
                 print(f"[账单-导航] 第{attempt}次尝试, Step 2: SSO已直接到达目标页面")
             else:
@@ -600,15 +550,13 @@ async def _navigate_to_bill_tab(
                 print(f"[账单-导航] 第{attempt}次尝试失败，{backoff:.1f}s后重试")
                 await asyncio.sleep(backoff)
 
-    if last_page is not None:
-        await _take_debug_screenshot(last_page, "bill_all_retries_failed", None)
+    await _take_debug_screenshot(page, "bill_all_retries_failed", None)
     print(f"[账单-导航] ❌ 导航失败，已重试{config.NAV_MAX_RETRIES}次")
     return False
 
 
 async def export_single_bill(
-    crawler: AsyncWebCrawler,
-    session_id: str,
+    page: Page,
     tab_url: str,
     output_dir: Path,
     reference_today: date | None = None,
@@ -617,111 +565,84 @@ async def export_single_bill(
 
     Flow:
     1. Navigate to bill tab via SSO proxy
-    2. Click export button → new tab opens automatically to export history page
-    3. In new tab, click download button (#downloadBalance-btn-0)
-    4. Wait for file download and extract if ZIP
-
-    Returns:
-        A tuple of (downloaded_file_path, resolved_today_date).
-        The resolved_today_date can be passed to subsequent tabs as
-        ``reference_today`` so they don't rely on their own picker value.
+    2. Select yesterday's date range
+    3. Click export button
+    4. Navigate to export-history page, poll for download button
+    5. Click download, wait for file, extract if ZIP
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    ok = await _navigate_to_bill_tab(crawler, session_id, tab_url)
+    ok = await _navigate_to_bill_tab(page, tab_url)
     if not ok:
         print(f"⚠️ 反爬机制触发，跳过: {tab_url}")
         return None, None
 
-    # Get Playwright page and context for subsequent operations
-    browser_manager = crawler.crawler_strategy.browser_manager  # type: ignore[union-attr]
-    page, context = await browser_manager.get_page(
-        crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
-    )
-
-    # 0) Select yesterday's date range before exporting
+    # 0) Select yesterday's date range
     selected_date = await _select_yesterday_date(page, reference_today)
-    # Derive the resolved "today" from the selected date so the caller can
-    # pass it to subsequent tabs.
     resolved_today: date | None = None
     if selected_date:
         try:
-            resolved_today = (
-                datetime.strptime(selected_date, "%Y-%m-%d").date()
-                + timedelta(days=1)
-            )
+            resolved_today = datetime.strptime(
+                selected_date, "%Y-%m-%d"
+            ).date() + timedelta(days=1)
         except ValueError:
             pass
     if not selected_date:
         print("[账单] 日期选择失败，将使用页面默认日期范围导出")
 
-    # 1) Click export button - this opens a new tab automatically
+    # 1) Click export button
     export_selectors = [
         "#exportBalance-btn",
         'button[class*="export"]',
         '[class*="export"] button',
     ]
 
-    # Use Playwright's wait_for_event to capture new page (tab)
-    # Start waiting for the 'page' event BEFORE clicking the button
+    clicked = await _pw_click(page, export_selectors, ["导出账单", "导出"])
+    if not clicked:
+        print("[账单] 未找到导出按钮")
+        return None, resolved_today
+    print("[账单] 已点击导出按钮，等待服务端生成导出任务...")
+    await _human_delay(2.0, 4.0)
+
+    # 2) Navigate to export-history page
+    export_history_url = config.BILL_EXPORT_HISTORY_MAP.get(tab_url)
+    if not export_history_url:
+        tab_part = (
+            tab_url.split("tab=")[1].split("&")[0] if "tab=" in tab_url else "4001"
+        )
+        export_history_url = (
+            "https://cashier.pinduoduo.com/main/bills/export-history"
+            f"?tab={tab_part}&__app_code=113"
+        )
+
     try:
-        async with context.expect_page(timeout=15000) as page_info:
-            clicked = await _pw_click(page, export_selectors, ["导出账单", "导出"])
-            if not clicked:
-                print("[账单] 未找到导出按钮")
-                return None, resolved_today
-            print("[账单] 已点击导出按钮，等待新标签页打开...")
-
-        new_page = await page_info.value
-        print(f"[账单] 新标签页已打开: {new_page.url}")
-
+        await page.goto(
+            export_history_url, wait_until="domcontentloaded", timeout=30000
+        )
     except Exception as e:
-        print(f"[账单] 等待新标签页失败: {e}")
+        print(f"[账单] 导航到导出历史页失败: {e}")
         return None, resolved_today
 
-    # Wait for the new page to load
+    await _human_delay(2.0, 3.0)
     try:
-        await new_page.wait_for_load_state("domcontentloaded", timeout=15000)
+        await page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:
         pass
-    await _human_delay(1.0, 2.0)
 
-    # Verify we're on the export history page
-    current_url = new_page.url or ""
-    if "export-history" not in current_url:
-        print(f"[账单] 新页面不是导出历史页: {current_url}")
-        # If not on export history, try navigating directly
-        export_history_url = config.BILL_EXPORT_HISTORY_MAP.get(tab_url)
-        if not export_history_url:
-            tab_part = (
-                tab_url.split("tab=")[1].split("&")[0] if "tab=" in tab_url else "4001"
-            )
-            export_history_url = (
-                "https://cashier.pinduoduo.com/main/bills/export-history"
-                f"?tab={tab_part}&__app_code=113"
-            )
-        try:
-            await new_page.goto(
-                export_history_url, wait_until="domcontentloaded", timeout=30000
-            )
-        except Exception as e:
-            print(f"[账单] 导航到导出历史页失败: {e}")
-            return None, resolved_today
+    current_url = page.url or ""
+    print(f"[账单] 已到达导出历史页: {current_url}")
 
-    # Check for anti-bot blocking
-    history_body = await new_page.evaluate("document.body.innerText || ''") or ""
+    history_body = await page.evaluate("document.body.innerText || ''") or ""
     if _is_blocked(history_body, current_url):
         _log_blocked_reason(history_body, current_url, "export_history")
         print(f"⚠️ 导出记录页被拦截，跳过: {tab_url}")
         return None, resolved_today
 
-    await _take_debug_screenshot(new_page, "export_history_page", output_dir)
+    await _take_debug_screenshot(page, "export_history_page", output_dir)
 
-    # 2) Click download button in new tab (#downloadBalance-btn-0)
-    # Use Playwright's expect_download for reliable download handling
+    # 3) Poll for download button
     print("[账单] 寻找下载按钮...")
 
-    # Try specific download button ID first, then fallback to other selectors
     download_selectors = [
         "#downloadBalance-btn-0",
         "[id^='downloadBalance-btn']",
@@ -732,104 +653,147 @@ async def export_single_bill(
         'button[class*="download"]',
     ]
 
-    # Wait for download event when clicking the button
-    try:
-        async with new_page.expect_download(timeout=60000) as download_info:
-            clicked_download = await _pw_click(
-                new_page, download_selectors, ["下载账单", "下载"]
-            )
+    max_poll_attempts = 4
+    poll_interval = 5.0
+    clicked_download = False
 
-            if not clicked_download:
-                print("[账单] 未找到下载按钮，尝试等待页面加载...")
-                await _human_delay(2.0, 3.0)
-                clicked_download = await _pw_click(
-                    new_page, download_selectors, ["下载账单", "下载"]
-                )
-
-            if not clicked_download:
-                print("[账单] 下载按钮未找到")
-                return None, resolved_today
-
-            print("[账单] 已点击下载按钮，等待下载完成...")
-
-        download = await download_info.value
-        suggested_name = download.suggested_filename
-        print(f"[账单] 下载文件名: {suggested_name}")
-
-        # Save to output directory
-        download_path = output_dir / suggested_name
-        await download.save_as(download_path)
-        downloaded_file = download_path
-
-    except Exception as e:
-        print(f"[账单] 下载事件捕获失败，尝试轮询方式: {e}")
-        # Fallback to polling method
-        before_files = set(output_dir.iterdir()) if output_dir.exists() else set()
-
+    for poll_idx in range(max_poll_attempts):
         clicked_download = await _pw_click(
-            new_page, download_selectors, ["下载账单", "下载"]
+            page, download_selectors, ["下载账单", "下载"]
         )
-        if not clicked_download:
-            print("[账单] 下载按钮未找到")
+        if clicked_download:
+            break
+
+        if poll_idx < max_poll_attempts - 1:
+            print(
+                f"[账单] 下载按钮未就绪, "
+                f"{poll_interval:.0f}s后刷新重试 ({poll_idx + 1}/{max_poll_attempts})..."
+            )
+            await asyncio.sleep(poll_interval)
+            try:
+                await page.reload(wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+            await _human_delay(1.0, 2.0)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+
+    if not clicked_download:
+        print("[账单] 下载按钮未找到，导出任务可能仍在生成中")
+        await _take_debug_screenshot(page, "download_btn_not_found", output_dir)
+        return None, resolved_today
+
+    print("[账单] 已点击下载按钮，等待下载完成...")
+
+    # 4) Wait for download
+    before_files = set(output_dir.iterdir()) if output_dir.exists() else set()
+
+    downloaded_file = await _wait_for_new_download(
+        output_dir=output_dir,
+        before=before_files,
+        timeout_s=max(10, config.DOWNLOAD_TIMEOUT // 1000),
+    )
+
+    if downloaded_file is None:
+        print("[账单] 轮询未检测到文件，尝试expect_download方式...")
+        try:
+            async with page.expect_download(timeout=60000) as download_info:
+                await _pw_click(page, download_selectors, ["下载账单", "下载"])
+            download = await download_info.value
+            suggested_name = download.suggested_filename
+            download_url = download.url
+            print(f"[账单] 下载文件名: {suggested_name}")
+            print(f"[账单] 下载URL: {download_url[:100]}...")
+            
+            download_path = output_dir / suggested_name
+            
+            # Workaround: Playwright's download.save_as() returns 0 bytes in Docker Chrome
+            # Use direct HTTP download with cookies instead
+            print("[账单] 使用直接HTTP下载方式...")
+            cookies = await page.context.cookies()
+            download_success = await _download_file_direct(
+                url=download_url,
+                cookies=cookies,
+                output_path=download_path,
+            )
+            
+            if not download_success:
+                # Fallback to Playwright's save_as (might work in non-Docker environments)
+                print("[账单] 直接下载失败，尝试Playwright save_as...")
+                await download.save_as(download_path)
+            
+            downloaded_file = download_path
+        except Exception as e:
+            print(f"[账单] 下载失败: {e}")
             return None, resolved_today
 
-        print("[账单] 已点击下载按钮，等待文件出现...")
+    # Validate downloaded file
+    if not downloaded_file.exists():
+        print(f"[账单] ❌ 下载文件不存在: {downloaded_file}")
+        return None, resolved_today
 
-        downloaded_file = await _wait_for_new_download(
-            output_dir=output_dir,
-            before=before_files,
-            timeout_s=max(10, config.DOWNLOAD_TIMEOUT // 1000),
-        )
+    file_size = downloaded_file.stat().st_size
+    print(f"✅ 账单已下载: {downloaded_file} ({file_size} bytes)")
 
-        if downloaded_file is None:
-            print("[账单] 下载超时")
-            return None, resolved_today
+    # Check if file is suspiciously small (likely an error page)
+    if file_size < 100:
+        print(f"[账单] ⚠️ 文件过小({file_size} bytes)，可能不是有效账单文件")
+        file_head = _read_file_head(downloaded_file, 200)
+        print(f"[账单] 文件内容: {file_head}")
+        try:
+            downloaded_file.unlink()
+        except Exception:
+            pass
+        return None, resolved_today
 
-    print(f"✅ 账单已下载: {downloaded_file}")
     if downloaded_file.suffix.lower() == ".zip":
+        # Validate it's actually a ZIP before extracting
+        if not _is_valid_zip(downloaded_file):
+            print(f"[账单] ❌ 下载的文件不是有效的ZIP格式")
+            # Try to diagnose what it is
+            file_head = _read_file_head(downloaded_file)
+            print(f"[账单] 文件头: {file_head[:300]}...")
+            if "<html" in file_head.lower() or "<!doctype" in file_head.lower():
+                print(f"[账单] ❌ 下载的是HTML页面，可能是登录过期或需要验证码")
+            # Clean up and return None
+            try:
+                downloaded_file.unlink()
+            except Exception:
+                pass
+            return None, resolved_today
+
         extracted = _extract_and_cleanup(downloaded_file)
         if extracted:
             print(f"✅ 已解压: {extracted}")
             return extracted, resolved_today
+        # Extraction failed, return None
+        return None, resolved_today
+
     return downloaded_file, resolved_today
 
 
 async def export_all_bills(
-    crawler: AsyncWebCrawler,
-    session_id: str,
-    cookie_path: Path,
+    page: Page,
     output_dir: Path,
 ) -> list[Path]:
     """Export bills from tab 4001 and 4002.
 
-    4001 is exported first; its resolved "today" date is passed to 4002 as
-    ``reference_today`` so that 4002 does not rely on its own (potentially
-    incorrect) picker default value.
-
-    Notes:
-        - `crawler` should be created with `BrowserConfig(accept_downloads=True,
-          downloads_path=str(output_dir), storage_state=str(cookie_path), ...)`
-        - Uses a fresh session_id suffix per tab to avoid session contamination
-          when one tab triggers anti-bot detection.
+    4001 is exported first; its resolved "today" date is passed to 4002.
     """
-    _ = cookie_path
     output_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded: list[Path] = []
-    reference_today: date | None = None  # populated by 4001, used by 4002
+    reference_today: date | None = None
 
-    for i, tab_url in enumerate(
-        [config.CASHIER_BILL_4001_URL, config.CASHIER_BILL_4002_URL]
-    ):
-        # Use a unique session per tab to avoid contamination from blocked attempts
-        tab_session_id = f"{session_id}_tab{i}"
+    for tab_url in [config.CASHIER_BILL_4001_URL, config.CASHIER_BILL_4002_URL]:
         try:
             file_path, resolved_today = await export_single_bill(
-                crawler, tab_session_id, tab_url, output_dir, reference_today
+                page, tab_url, output_dir, reference_today
             )
             if file_path is not None:
                 downloaded.append(file_path)
-            # Capture the first tab's resolved date for subsequent tabs
             if resolved_today is not None and reference_today is None:
                 reference_today = resolved_today
                 print(

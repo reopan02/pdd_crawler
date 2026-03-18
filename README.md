@@ -1,14 +1,17 @@
 # PDD Crawler - 拼多多商家后台数据采集工具
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688)](https://fastapi.tiangolo.com/)
-[![版本](https://img.shields.io/badge/版本-0.2.0-green)](https://github.com/reopan02/pdd_crawler)
+[![Playwright](https://img.shields.io/badge/Playwright-1.40%2B-009688)](https://playwright.dev/)
+[![版本](https://img.shields.io/badge/版本-0.3.0-green)](https://github.com/reopan02/pdd_crawler)
 
-基于 Web 界面的拼多多商家后台数据采集工具。所有数据仅在内存中运行，不写入本地文件，支持局域网多用户访问。
+基于 Web 界面的拼多多商家后台数据采集工具。每个店铺对应一个 Docker 容器中的 Chrome 浏览器，通过 CDP (Chrome DevTools Protocol) 连接执行操作。
 
 ## 功能
 
-- **Cookie 管理** — 上传 Playwright storage_state JSON / 扫码登录，在线验证有效性
+- **店铺管理** — 配置 Chrome 容器，支持多店铺
+- **QR 登录** — 通过 CDP 截图推送二维码到 Web 端扫码登录
+- **登录验证** — 验证 MMS 登录态 + Cashier SSO 会话
 - **首页数据抓取** — 采集商家后台首页的店铺经营数据
 - **账单导出** — 导出资金流水 (4001) 和订单交易 (4002) 账单
 - **数据清洗** — 对采集的原始数据进行清洗，生成结构化日报并下载
@@ -17,107 +20,141 @@
 
 | 层级 | 技术 |
 |------|------|
-| 后端 | Python 3.8+ / FastAPI / Uvicorn |
+| 后端 | Python 3.10+ / FastAPI / Uvicorn / Playwright |
 | 前端 | React SPA (内嵌 static/index.html) |
-| 爬虫 | crawl4ai + Playwright (Chromium) |
+| 浏览器 | Docker Chrome + CDP (connect_over_cdp) |
 | 通信 | REST API + SSE (Server-Sent Events) |
+
+## 架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Web 浏览器                            │
+│   (业务人员访问 http://<IP>:8000 操作)                        │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ HTTP / SSE
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     FastAPI 后端                             │
+│   ├── /api/shops/*      — 店铺管理、登录、验证                │
+│   ├── /api/crawl/*      — 采集任务管理                       │
+│   └── /api/clean/*      — 数据清洗                           │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ playwright.connect_over_cdp()
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│               Chrome 容器 (每个店铺一个)                       │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│   │ chrome-shop1│  │ chrome-shop2│  │ chrome-shop3│  ...    │
+│   │  :9222/CDP  │  │  :9223/CDP  │  │  :9224/CDP  │         │
+│   │  :6080/VNC  │  │  :6081/VNC  │  │  :6082/VNC  │         │
+│   └─────────────┘  └─────────────┘  └─────────────┘         │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## 快速开始
 
-### 安装
+### 前置要求
 
-```bash
-pip install -e .
-playwright install chromium
+- Docker + Docker Compose
+- Python 3.10+
+
+### 1. 配置店铺
+
+编辑 `src/pdd_crawler/config.py` 中的 `CHROME_ENDPOINTS`：
+
+```python
+CHROME_ENDPOINTS = [
+    ChromeEndpoint(
+        shop_id="shop1",
+        shop_name="店铺1",
+        cdp_url="http://localhost:9222",
+        vnc_url="http://localhost:6080",
+    ),
+    # 添加更多店铺...
+]
 ```
 
-### 启动
+或通过环境变量覆盖：
 
 ```bash
-# 前台运行 (默认 0.0.0.0:8000)
-python -m pdd_crawler
-
-# 指定端口
-python -m pdd_crawler --port 9000
-
-# 指定监听地址
-python -m pdd_crawler --host 127.0.0.1 --port 8080
+export CHROME_SHOP1_CDP=http://192.168.1.100:9222
+export CHROME_SHOP1_VNC=http://192.168.1.100:6080
 ```
 
-访问 `http://localhost:8000` 或局域网 `http://<本机IP>:8000`。
-
-### 后台运行 (WSL / Linux)
+### 2. 启动服务
 
 ```bash
-chmod +x start.sh
+# 构建并启动所有容器
+docker-compose up -d
 
-./start.sh            # 启动
-./start.sh stop       # 停止
-./start.sh restart    # 重启
-./start.sh status     # 查看状态
-./start.sh log        # 实时查看日志
+# 查看状态
+docker-compose ps
+
+# 查看日志
+docker-compose logs -f backend
 ```
 
-自定义地址和端口：
+### 3. 访问 Web 界面
 
-```bash
-PDD_HOST=127.0.0.1 PDD_PORT=9000 ./start.sh
-```
+访问 `http://localhost:8000` 或局域网 `http://<IP>:8000`。
 
-日志输出到 `logs/` 目录，PID 记录在 `logs/web.pid`。
+### 4. 首次登录
+
+1. 点击店铺卡片 → "登录"
+2. 手机拼多多 APP 扫描二维码
+3. 登录态保存在容器持久化卷中，后续无需重复登录
 
 ## 项目结构
 
 ```
 pdd_crawler/
 ├── src/pdd_crawler/
-│   ├── __main__.py                 # CLI 入口，启动 Web 服务
-│   ├── config.py                   # 配置常量 (URL、超时、反检测)
-│   ├── cookie_manager.py           # Cookie 管理与浏览器认证
-│   ├── home_scraper.py             # 首页数据抓取 (JS 注入提取)
-│   ├── crawl4ai_bill_exporter.py   # 账单导出 (SSO + 下载)
+│   ├── __main__.py                 # CLI 入口
+│   ├── config.py                   # 配置常量 (URL、店铺定义)
+│   ├── chrome_pool.py              # CDP 连接池管理
+│   ├── shop_manager.py             # 登录验证逻辑
+│   ├── home_scraper.py             # 首页数据抓取
+│   ├── bill_exporter.py            # 账单导出
 │   └── web/
-│       ├── app.py                  # FastAPI 应用 (CORS、路由挂载)
-│       ├── deps.py                 # 共享依赖 (会话ID、浏览器信号量)
-│       ├── session_store.py        # 内存会话存储 (多用户隔离)
-│       ├── cookie_api.py           # Cookie 上传/验证/删除/扫码登录
-│       ├── task_api.py             # 采集任务管理 (SSE 进度推送)
-│       ├── clean_api.py            # 数据清洗与日报生成
-│       ├── run.py                  # 备用启动入口
+│       ├── app.py                  # FastAPI 应用
+│       ├── deps.py                 # 共享依赖 (chrome_pool)
+│       ├── session_store.py        # 内存会话存储
+│       ├── shop_api.py             # 店铺管理 API
+│       ├── task_api.py             # 采集任务 API
+│       ├── clean_api.py            # 数据清洗 API
 │       └── static/index.html       # React SPA 前端
-├── start.sh                        # WSL/Linux 后台启动脚本
-├── tests/
+├── docker/
+│   └── chrome/
+│       ├── Dockerfile              # Chrome 容器镜像
+│       └── entrypoint.sh           # 启动脚本
+├── docker-compose.yml              # 容器编排
 ├── pyproject.toml
 └── README.md
 ```
 
 ## API
 
-### Cookie 管理
+### 店铺管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/cookies/upload` | 上传 storage_state JSON 文件 |
-| GET | `/api/cookies` | 列出当前会话所有 Cookie |
-| POST | `/api/cookies/{id}/validate` | 启动浏览器验证 Cookie 有效性 |
-| POST | `/api/cookies/{id}/rename` | 重命名店铺名称 |
-| DELETE | `/api/cookies/{id}` | 删除 Cookie |
-
-### 扫码登录
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/qr-login/start` | 启动扫码登录，返回 task_id |
-| GET | `/api/qr-login/{id}/stream` | SSE 流：推送二维码截图和登录状态 |
+| GET | `/api/shops` | 列出所有店铺及连接/登录状态 |
+| GET | `/api/shops/{shop_id}` | 获取单个店铺状态 |
+| POST | `/api/shops/{shop_id}/login` | 启动 QR 登录 |
+| GET | `/api/shops/{shop_id}/login/{task_id}/stream` | SSE：推送二维码 |
+| POST | `/api/shops/{shop_id}/validate` | 验证登录态 |
+| POST | `/api/shops/validate-all` | 验证所有店铺 |
+| GET | `/api/shops/validate-all/stream` | SSE：验证进度 |
 
 ### 采集任务
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/crawl/start` | 启动采集任务 (首页抓取 + 账单导出) |
+| POST | `/api/crawl/start` | 启动采集 (`{"shop_ids": [...], "operations": [...]}`) |
 | GET | `/api/tasks` | 列出所有任务 |
 | GET | `/api/tasks/{id}` | 查询任务状态和结果 |
-| GET | `/api/tasks/{id}/progress` | SSE 流：实时进度推送 |
+| GET | `/api/tasks/{id}/progress` | SSE：实时进度 |
 | GET | `/api/tasks/{id}/result` | 获取任务完整数据 |
 
 ### 数据清洗
@@ -125,42 +162,47 @@ pdd_crawler/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/clean` | 直接传入数据进行清洗 |
-| POST | `/api/clean/from-task/{id}` | 从已完成任务的结果中清洗 |
-| POST | `/api/clean/download` | 生成并下载清洗后的 JSON 日报 |
+| POST | `/api/clean/from-task/{id}` | 从任务结果清洗 |
+| POST | `/api/clean/download` | 生成并下载 JSON 日报 |
 
 ### 其他
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/health` | 健康检查 |
+| GET | `/health` | 健康检查 (含店铺连接状态) |
 
-## 架构说明
+## 数据清洗 API
 
-### 数据流
-
-```
-上传 Cookie / 扫码登录
-        ↓
-  内存会话存储 (SessionStore)
-        ↓
-  启动采集任务 → crawl4ai + Playwright → 内存中的原始数据
-        ↓
-  数据清洗 → 结构化日报 JSON
-        ↓
-  浏览器下载 (不落盘)
-```
-
-### 多用户隔离
-
-通过 `X-Session-ID` 请求头实现会话隔离，每个会话独立维护 Cookie 列表、任务队列和采集结果。未指定时使用 `default` 会话。
-
-### 浏览器并发控制
-
-通过 `asyncio.Semaphore(2)` 限制最多同时运行 2 个浏览器实例，防止资源耗尽。
+详情见 [数据清洗说明](./docs/data_cleaning.md)
 
 ## 注意事项
 
-1. **数据不持久化** — 所有数据仅存于内存，服务重启后丢失，请及时下载
+1. **登录态持久化** — 登录态保存在 Docker 卷中，重启容器后保留
 2. **安全环境** — 请在可信的局域网环境中使用，API 未设鉴权
 3. **频率控制** — 避免过于频繁地访问拼多多后台，以免触发风控
 4. **仅供学习** — 本工具仅供学习交流使用，请遵守相关法律法规
+
+## 开发
+
+### 本地开发模式（不使用 Docker）
+
+```bash
+# 安装依赖
+pip install -e .
+
+# 手动启动 Chrome 容器
+docker run -d --name pdd-chrome-dev \
+  -p 9222:9222 -p 6080:6080 \
+  -v pdd-chrome-data:/home/chrome/chrome-data \
+  pdd-chrome:latest
+
+# 启动后端
+python -m pdd_crawler
+```
+
+### 构建 Chrome 容器镜像
+
+```bash
+cd docker/chrome
+docker build -t pdd-chrome:latest .
+```

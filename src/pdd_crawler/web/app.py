@@ -1,7 +1,7 @@
 """FastAPI application — PDD Crawler Web Interface.
 
-Serves the React SPA and provides REST + SSE APIs for cookie management,
-crawl task orchestration, and data cleaning.
+Architecture: Chrome containers (Docker) + CDP connections + FastAPI backend.
+Each shop has a dedicated Chrome instance; operations use Playwright connect_over_cdp.
 
 Run with: uvicorn pdd_crawler.web.app:app --host 0.0.0.0 --port 8000
 """
@@ -22,15 +22,21 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — startup/shutdown hooks."""
-    print("[Web] PDD Crawler Web 启动")
+    from pdd_crawler.web.data_store import init_db
+    from pdd_crawler.web.deps import chrome_pool
+
+    init_db()
+    await chrome_pool.startup()
+    print("[Web] PDD Crawler Web 启动 (CDP 模式)")
     yield
+    await chrome_pool.shutdown()
     print("[Web] PDD Crawler Web 关闭")
 
 
 app = FastAPI(
     title="PDD Crawler",
-    description="拼多多商家后台数据采集工具 — Web 界面",
-    version="0.2.0",
+    description="拼多多商家后台数据采集工具 — Web 界面 (CDP 模式)",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -47,16 +53,24 @@ app.add_middleware(
 # ── Health check ──────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    from pdd_crawler.web.deps import chrome_pool
+
+    shops = chrome_pool.list_shops()
+    return {
+        "status": "ok",
+        "mode": "cdp",
+        "shops": len(shops),
+        "connected": sum(1 for s in shops if s["connected"]),
+    }
 
 
 # ── Import and register API routers ──────────────────────
-from pdd_crawler.web.cookie_api import router as cookie_router  # noqa: E402
+from pdd_crawler.web.shop_api import router as shop_router  # noqa: E402
 from pdd_crawler.web.task_api import router as task_router  # noqa: E402
 from pdd_crawler.web.clean_api import router as clean_router  # noqa: E402
 from pdd_crawler.web.data_api import router as data_router  # noqa: E402
 
-app.include_router(cookie_router, prefix="/api")
+app.include_router(shop_router, prefix="/api")
 app.include_router(task_router, prefix="/api")
 app.include_router(clean_router, prefix="/api")
 app.include_router(data_router, prefix="/api")

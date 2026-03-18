@@ -129,6 +129,7 @@ qrcode.png
 .vscode/
 .idea/
 .sisyphus/
+.planning/
 
 # Runtime artifacts
 logs/

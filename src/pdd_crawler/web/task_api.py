@@ -1,17 +1,21 @@
-"""Crawl task management API endpoints."""
+"""Crawl task management API endpoints.
+
+Uses chrome_pool to connect to shop Chrome containers via CDP.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import tempfile
-
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Request, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from pdd_crawler.web.deps import get_session_id, browser_semaphore
+from pdd_crawler import config
+from pdd_crawler.web.deps import get_session_id, chrome_pool
 from pdd_crawler.web.session_store import store
 
 router = APIRouter(tags=["tasks"])
@@ -19,32 +23,37 @@ router = APIRouter(tags=["tasks"])
 
 @router.post("/crawl/start")
 async def start_crawl(request: Request):
-    """Start a crawl task for multiple cookies.
+    """Start a crawl task for one or more shops.
 
-    Body: {"cookie_ids": ["..."], "operations": ["scrape_home", "export_bills"]}
+    Body: {"shop_ids": ["shop1", ...], "operations": ["scrape_home", "export_bills"]}
     """
     session_id = get_session_id(request)
     body = await request.json()
 
-    cookie_ids = body.get("cookie_ids", [])
-    if "cookie_id" in body and not cookie_ids:
-        cookie_ids = [body["cookie_id"]]
+    shop_ids = body.get("shop_ids", [])
+    if "shop_id" in body and not shop_ids:
+        shop_ids = [body["shop_id"]]
+
+    # Backward compat: accept cookie_ids as shop_ids
+    if not shop_ids and "cookie_ids" in body:
+        shop_ids = body["cookie_ids"]
+    if not shop_ids and "cookie_id" in body:
+        shop_ids = [body["cookie_id"]]
 
     operations = body.get("operations", ["scrape_home", "export_bills"])
 
-    if not cookie_ids:
-        raise HTTPException(status_code=422, detail="缺少 cookie_ids")
+    if not shop_ids:
+        raise HTTPException(status_code=422, detail="缺少 shop_ids")
 
-    for cid in cookie_ids:
-        if store.get_cookie(session_id, cid) is None:
-            raise HTTPException(status_code=404, detail=f"Cookie {cid} 不存在")
+    for sid in shop_ids:
+        if config.get_endpoint(sid) is None:
+            raise HTTPException(status_code=404, detail=f"店铺不存在: {sid}")
 
     task_type = "full" if len(operations) > 1 else operations[0]
     task = store.create_task(session_id, task_type)
 
-    # Launch crawl in background
     asyncio.create_task(
-        _crawl_background(session_id, task.task_id, cookie_ids, operations)
+        _crawl_background(session_id, task.task_id, shop_ids, operations)
     )
 
     return {"task_id": task.task_id, "status": "pending"}
@@ -90,7 +99,6 @@ async def get_task(request: Request, task_id: str):
         "file_count": len(task.files),
     }
 
-    # Include data if completed (exclude large binary fields)
     if task.status == "completed" and task.data:
         safe_data = {k: v for k, v in task.data.items() if k not in ("qr_image",)}
         result["data"] = safe_data
@@ -111,6 +119,7 @@ async def task_progress_stream(request: Request, task_id: str):
 
         last_progress = -1
         last_message = ""
+        log_cursor = 0
 
         while task.status in ("pending", "running"):
             if task.progress != last_progress or task.message != last_message:
@@ -126,9 +135,24 @@ async def task_progress_stream(request: Request, task_id: str):
                 }
                 last_progress = task.progress
                 last_message = task.message
+
+            log_entries, log_cursor = task.log.read_since(log_cursor)
+            for entry in log_entries:
+                yield {
+                    "event": "log",
+                    "data": json.dumps({"msg": entry.msg, "ts": entry.ts}),
+                }
+
             await asyncio.sleep(1)
 
-        # Final event
+        # Flush remaining logs
+        log_entries, log_cursor = task.log.read_since(log_cursor)
+        for entry in log_entries:
+            yield {
+                "event": "log",
+                "data": json.dumps({"msg": entry.msg, "ts": entry.ts}),
+            }
+
         if task.status == "completed":
             yield {
                 "event": "completed",
@@ -145,10 +169,7 @@ async def task_progress_stream(request: Request, task_id: str):
             yield {
                 "event": "error",
                 "data": json.dumps(
-                    {
-                        "status": "failed",
-                        "error": task.error or "任务失败",
-                    }
+                    {"status": "failed", "error": task.error or "任务失败"}
                 ),
             }
 
@@ -166,7 +187,7 @@ async def download_task_file(request: Request, task_id: str, file_index: int):
         raise HTTPException(status_code=400, detail="任务未完成")
     raise HTTPException(
         status_code=403,
-        detail="未清洗数据不支持下载，请先在“数据清洗与处理”中生成并下载清洗结果",
+        detail="未清洗数据不支持下载，请先在数据清洗与处理中生成并下载清洗结果",
     )
 
 
@@ -196,146 +217,128 @@ async def get_task_result(request: Request, task_id: str):
 async def _crawl_background(
     session_id: str,
     task_id: str,
-    cookie_ids: list[str],
+    shop_ids: list[str],
     operations: list[str],
 ) -> None:
-    """Background task: run crawl operations."""
+    """Background task: run crawl operations via CDP."""
     task = store.get_task(session_id, task_id)
     if task is None:
         return
 
     task.status = "running"
     task.message = "正在准备..."
+    task.log.append("采集任务启动")
 
     try:
-        total_cookies = len(cookie_ids)
-        for c_idx, cookie_id in enumerate(cookie_ids):
-            entry = store.get_cookie(session_id, cookie_id)
-            if entry is None:
+        total_shops = len(shop_ids)
+        for s_idx, shop_id in enumerate(shop_ids):
+            ep = config.get_endpoint(shop_id)
+            if ep is None:
                 continue
 
-            task.message = (
-                f"正在处理 {entry.shop_name} ({c_idx + 1}/{total_cookies})..."
-            )
+            shop_name = ep.shop_name
+            task.message = f"正在处理 {shop_name} ({s_idx + 1}/{total_shops})..."
+            task.log.append(f"[{s_idx + 1}/{total_shops}] 开始处理: {shop_name}")
 
-            tmp_path = None
+            tmp_download_dir = Path(tempfile.mkdtemp(prefix="pdd_bills_"))
+
             try:
-                async with browser_semaphore:
-                    # Write storage_state to temp file
-                    tmp = tempfile.NamedTemporaryFile(
-                        suffix=".json", delete=False, mode="w", encoding="utf-8"
-                    )
-                    json.dump(entry.storage_state, tmp)
-                    tmp.close()
-                    tmp_path = Path(tmp.name)
+                async with chrome_pool.acquire(shop_id) as page:
+                    total_ops = len(operations)
+                    current_op = 0
+                    base_progress = int(s_idx / total_shops * 100)
+                    progress_weight = 100 / total_shops
 
-                    # Create temp dir for downloads
-                    tmp_download_dir = Path(tempfile.mkdtemp(prefix="pdd_bills_"))
+                    # ── Scrape home ──
+                    if "scrape_home" in operations:
+                        current_op += 1
+                        op_progress = int(
+                            (current_op - 1) / total_ops * progress_weight
+                        )
+                        task.message = f"[{shop_name}] 正在抓取首页数据..."
+                        task.log.append("  → 抓取首页概览数据...")
+                        task.progress = base_progress + op_progress + 5
 
-                    from pdd_crawler.cookie_manager import create_crawler
-                    from pdd_crawler.home_scraper import scrape_home
-                    from pdd_crawler.crawl4ai_bill_exporter import export_all_bills
+                        try:
+                            from pdd_crawler.home_scraper import scrape_home
 
-                    import uuid
-
-                    crawl_session_id = str(uuid.uuid4())
-
-                    crawler = await create_crawler(
-                        cookie_path=tmp_path,
-                        headless=True,
-                        downloads_path=tmp_download_dir,
-                    )
-
-                    try:
-                        total_ops = len(operations)
-                        current_op = 0
-                        base_cookie_progress = int(c_idx / total_cookies * 100)
-                        cookie_progress_weight = 100 / total_cookies
-
-                        # ── Scrape home ──
-                        if "scrape_home" in operations:
-                            current_op += 1
-                            op_progress = int(
-                                (current_op - 1) / total_ops * cookie_progress_weight
+                            home_data = await scrape_home(page)
+                            if "home_data" not in task.data:
+                                task.data["home_data"] = []
+                            task.data["home_data"].append(
+                                {
+                                    "shop_id": shop_id,
+                                    "shop_name": shop_name,
+                                    "data": home_data,
+                                }
                             )
-                            task.message = f"[{entry.shop_name}] 正在抓取首页数据..."
-                            task.progress = base_cookie_progress + op_progress + 5
+                            # Update shop name from actual page
+                            actual_name = str(home_data.get("shop_name", ""))
+                            if actual_name:
+                                shop_name = actual_name
+                                ep.shop_name = actual_name
 
-                            try:
-                                home_data = await scrape_home(crawler, crawl_session_id)
-                                if "home_data" not in task.data:
-                                    task.data["home_data"] = []
-                                task.data["home_data"].append(
+                            task.log.append("  → 首页数据抓取完成 ✓")
+                            task.progress = base_progress + int(
+                                current_op / total_ops * progress_weight
+                            )
+                        except RuntimeError as e:
+                            if "会话已过期" in str(e):
+                                task.log.append("  → 会话已过期，需要重新登录")
+                            raise
+
+                    # ── Export bills ──
+                    if "export_bills" in operations:
+                        current_op += 1
+                        op_progress = int(
+                            (current_op - 1) / total_ops * progress_weight
+                        )
+                        task.message = f"[{shop_name}] 正在导出账单..."
+                        task.log.append("  → 导出账单 (SSO → cashier → 下载CSV)...")
+                        task.progress = base_progress + op_progress + 5
+
+                        from pdd_crawler.bill_exporter import export_all_bills
+
+                        downloaded_paths = await export_all_bills(
+                            page, tmp_download_dir
+                        )
+
+                        for fpath in downloaded_paths:
+                            if fpath.exists():
+                                content = fpath.read_bytes()
+                                media_type = (
+                                    "text/csv"
+                                    if fpath.suffix.lower() == ".csv"
+                                    else "application/octet-stream"
+                                )
+                                task.files.append(
                                     {
-                                        "cookie_id": cookie_id,
-                                        "shop_name": entry.shop_name,
-                                        "data": home_data,
+                                        "filename": f"{shop_name}_{fpath.name}",
+                                        "content": content,
+                                        "media_type": media_type,
                                     }
                                 )
-                                task.progress = base_cookie_progress + int(
-                                    current_op / total_ops * cookie_progress_weight
-                                )
-                            except RuntimeError as e:
-                                if "会话已过期" in str(e):
-                                    entry.status = "invalid"
-                                raise
 
-                        # ── Export bills ──
-                        if "export_bills" in operations:
-                            current_op += 1
-                            op_progress = int(
-                                (current_op - 1) / total_ops * cookie_progress_weight
-                            )
-                            task.message = f"[{entry.shop_name}] 正在导出账单..."
-                            task.progress = base_cookie_progress + op_progress + 5
-
-                            downloaded_paths = await export_all_bills(
-                                crawler,
-                                crawl_session_id,
-                                tmp_path,
-                                tmp_download_dir,
-                            )
-
-                            # Read downloaded files into memory
-                            for fpath in downloaded_paths:
-                                if fpath.exists():
-                                    content = fpath.read_bytes()
-                                    media_type = (
-                                        "text/csv"
-                                        if fpath.suffix.lower() == ".csv"
-                                        else "application/octet-stream"
-                                    )
-                                    # prepend shop name to filename to avoid conflicts
-                                    task.files.append(
-                                        {
-                                            "filename": f"{entry.shop_name}_{fpath.name}",
-                                            "content": content,
-                                            "media_type": media_type,
-                                        }
-                                    )
-
-                            task.progress = base_cookie_progress + int(
-                                current_op / total_ops * cookie_progress_weight
-                            )
-
-                    finally:
-                        await crawler.close()
-
-                        # Clean up temp download dir
-                        import shutil
-
-                        if tmp_download_dir.exists():
-                            shutil.rmtree(tmp_download_dir, ignore_errors=True)
+                        task.progress = base_progress + int(
+                            current_op / total_ops * progress_weight
+                        )
+                        task.log.append(
+                            f"  → 账单导出完成, {len(downloaded_paths)} 个文件 ✓"
+                        )
 
             finally:
-                if tmp_path and tmp_path.exists():
-                    tmp_path.unlink(missing_ok=True)
+                if tmp_download_dir.exists():
+                    shutil.rmtree(tmp_download_dir, ignore_errors=True)
 
         task.status = "completed"
         task.progress = 100
         task.message = "全部完成"
+        task.log.append("采集任务全部完成 ✓")
+        task.log.finished = True
 
     except Exception as e:
         task.status = "failed"
         task.error = str(e)
         task.message = f"任务失败: {e}"
+        task.log.append(f"任务失败: {e}")
+        task.log.finished = True
