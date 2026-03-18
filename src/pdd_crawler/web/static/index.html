@@ -437,84 +437,278 @@
             font-size: 15px;
         }
 
-        /* Log Panel */
-        .log-panel {
-            margin-top: 20px;
-            background: #1d1d1f;
-            border-radius: 12px;
-            padding: 16px 20px;
-            max-height: 320px;
-            overflow-y: auto;
-            font-family: var(--font-mono);
-            font-size: 12px;
-            line-height: 1.8;
+        /* Data Management Section */
+        .data-toolbar {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            margin-bottom: 24px;
+            background: var(--panel-bg);
+            border-radius: var(--radius-card);
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(0,0,0,0.02);
+            overflow: hidden;
         }
-        .log-line {
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        .log-line[data-level="step"] { color: #64d2ff; }
-        .log-line[data-level="ok"] { color: #30d158; }
-        .log-line[data-level="fail"] { color: #ff453a; }
-        .log-line[data-level="info"] { color: #98989d; }
-
-        /* Batch Toolbar */
-        .batch-toolbar {
+        .data-toolbar-top {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px 16px;
-            background: rgba(0, 113, 227, 0.04);
-            border: 1px solid rgba(0, 113, 227, 0.15);
-            border-radius: 10px;
-            margin-bottom: 16px;
-            animation: fadeIn 0.2s ease;
+            gap: 16px;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
         }
-        .batch-toolbar .batch-count {
-            font-size: 14px;
+        .data-toolbar-bottom {
+            padding: 16px 24px;
+        }
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .filter-group label {
             font-weight: 600;
-            color: var(--accent-blue);
-            margin-right: auto;
+            font-size: 13px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            margin-bottom: 0;
         }
-
-        /* Checkbox in table */
-        th.col-check, td.col-check {
-            width: 40px;
-            text-align: center;
+        .filter-group label::before {
+            content: '';
+            display: inline-block;
+            width: 3px;
+            height: 14px;
+            background: var(--accent-blue);
+            border-radius: 2px;
+            margin-right: 6px;
+            vertical-align: middle;
         }
-        td.col-check input[type="checkbox"],
-        th.col-check input[type="checkbox"] {
-            width: 16px;
-            height: 16px;
-            accent-color: var(--accent-blue);
+        .filter-input {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .filter-input:focus {
+            border-color: var(--accent-blue);
+        }
+        .chip-list {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
             cursor: pointer;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg);
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .chip.active {
+            background: var(--accent-blue);
+            color: #fff;
+            border-color: var(--accent-blue);
+        }
+        .chip:hover:not(.active) {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+        .shop-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .shop-count {
+            font-size: 12px;
+            color: var(--text-secondary);
         }
 
-        /* Drop Zone */
-        .drop-zone {
+        /* Data Table */
+        .data-table-wrapper {
+            background: var(--panel-bg);
+            border-radius: var(--radius-card);
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(0,0,0,0.02);
+            overflow-x: auto;
+            margin-bottom: 16px;
+        }
+        .shop-table-title {
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            background: linear-gradient(135deg, rgba(0,113,227,0.06), rgba(0,113,227,0.02));
+            border-bottom: 1px solid var(--border-color);
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            white-space: nowrap;
+            table-layout: fixed;
+        }
+        .data-table col.col-date { width: 110px; }
+        .data-table col.col-weekday { width: 70px; }
+        .data-table col.col-num { width: 120px; }
+        .data-table col.col-action { width: 50px; }
+
+        .data-table thead th {
+            position: sticky;
+            background: #f5f7fa;
+            padding: 8px 10px;
+            text-align: center;
+            border-bottom: 2px solid var(--border-color);
+            font-weight: 600;
+            font-size: 11px;
+            color: var(--text-secondary);
+            z-index: 2;
+        }
+        .data-table thead tr.group-header-row th { top: 0; z-index: 3; }
+        .data-table thead tr.col-header-row th { top: 30px; z-index: 2; }
+        .data-table thead th.group-base { background: #e8f4fd; color: var(--text-primary); font-size: 12px; }
+        .data-table thead th.group-promo { background: #fff3e0; color: #e6a23c; font-size: 12px; }
+        .data-table thead th.group-cost { background: #ede7f6; color: #7c4dff; font-size: 12px; }
+        .data-table thead th.group-empty { background: #f5f7fa; }
+
+        .data-table tbody td {
+            padding: 6px 10px;
+            border-bottom: 1px solid #f0f0f0;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .data-table tbody tr:hover { background: #ecf5ff; }
+        .data-table tbody tr.no-data td { color: #ccc; }
+        .data-table tbody tr.summary-row {
+            background: #fafafa;
+            font-weight: 600;
+        }
+        .data-table tbody tr.summary-row td {
+            border-top: 2px solid var(--border-color);
+        }
+        .data-table td.editable {
+            cursor: pointer;
+            position: relative;
+        }
+        .data-table td.editable:hover {
+            background: #f0f7ff;
+            outline: 1px solid var(--accent-blue);
+            outline-offset: -1px;
+        }
+        .cell-input {
+            width: 100%;
+            padding: 2px 4px;
+            border: 1px solid var(--accent-blue);
+            border-radius: 3px;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+            outline: none;
+            background: #fff;
+            box-shadow: 0 0 0 2px rgba(0,113,227,0.2);
+        }
+        .btn-icon {
+            padding: 4px 6px;
+            font-size: 14px;
+            line-height: 1;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-secondary);
+            border: none;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-icon:hover {
+            color: var(--accent-red);
+            background: rgba(255,59,48,0.08);
+        }
+
+        /* Upload zone */
+        .upload-zone {
             border: 2px dashed var(--border-color);
             border-radius: 12px;
             padding: 32px;
             text-align: center;
-            color: var(--text-secondary);
-            font-size: 14px;
             cursor: pointer;
             transition: all 0.2s;
-            margin-bottom: 20px;
+            background: var(--panel-bg);
+            margin-bottom: 16px;
         }
-        .drop-zone:hover {
-            border-color: #c5c5cb;
-            background: rgba(0,0,0,0.01);
-        }
-        .drop-zone.drag-over {
+        .upload-zone:hover, .upload-zone.dragover {
             border-color: var(--accent-blue);
-            background: rgba(0, 113, 227, 0.04);
-            color: var(--accent-blue);
+            background: rgba(0,113,227,0.03);
         }
-        .drop-zone-icon {
-            font-size: 32px;
-            margin-bottom: 8px;
+        .upload-zone p { color: var(--text-secondary); margin-top: 8px; font-size: 14px; }
+        .upload-zone .icon { font-size: 36px; }
+
+        .upload-result {
+            margin-top: 12px;
+            padding: 8px 16px;
+            background: rgba(52,199,89,0.1);
+            border-radius: 8px;
+            color: #248a3d;
+            font-size: 13px;
         }
+        .upload-result.error {
+            background: rgba(255,59,48,0.1);
+            color: #c93429;
+        }
+
+        /* Add Modal */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 12px 16px;
+            align-items: center;
+        }
+        .form-grid label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            text-align: right;
+            margin-bottom: 0;
+        }
+        .form-grid input, .form-grid select {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .form-grid input:focus, .form-grid select:focus {
+            border-color: var(--accent-blue);
+        }
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        .loading-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            color: var(--text-secondary);
+            gap: 8px;
+        }
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -549,18 +743,42 @@
             const [crawlStatus, setCrawlStatus] = useState({ running: false, progress: 0, message: '', taskId: null });
             const [cleanedReport, setCleanedReport] = useState(null);
 
-            // Cookie table selection
-            const [checkedCookies, setCheckedCookies] = useState([]);
-            // Validation log panel
-            const [validateLogs, setValidateLogs] = useState([]);
-            const [validating, setValidating] = useState(false);
-            const logPanelRef = useRef(null);
-
             // Updated Form states for multi-select
             const [selectedCookies, setSelectedCookies] = useState([]);
             const [crawlOps, setCrawlOps] = useState({ scrape_home: true, export_bills: true });
 
             const eventSourceRef = useRef(null);
+
+            // --- Data Management State ---
+            const [dataShops, setDataShops] = useState([]);
+            const [dataMonths, setDataMonths] = useState([]);
+            const [selectedDataShops, setSelectedDataShops] = useState([]);
+            const [selectedMonth, setSelectedMonth] = useState('');
+            const [dataRows, setDataRows] = useState([]);
+            const [dataLoading, setDataLoading] = useState(false);
+            const [editingCell, setEditingCell] = useState(null); // {rowId, field}
+            const [editingValue, setEditingValue] = useState('');
+            const [showAddModal, setShowAddModal] = useState(false);
+            const [addForm, setAddForm] = useState({
+                shop_name: '', data_date: '',
+                payment_amount: 0, promotion_cost: 0, marketing_cost: 0,
+                after_sale_cost: 0, tech_service_fee: 0, other_cost: 0, platform_refund: 0,
+            });
+            const [uploadDragover, setUploadDragover] = useState(false);
+            const [uploadResult, setUploadResult] = useState(null);
+
+            const dataColumns = [
+                { key: 'data_date', label: '日期', group: '', editable: false },
+                { key: 'weekday', label: '星期', group: '', editable: false },
+                { key: 'payment_amount', label: '支付金额', group: '店铺基础数据', editable: true },
+                { key: 'promotion_cost', label: '全站推广', group: '付费推广数据', editable: true },
+                { key: 'marketing_cost', label: '评价有礼+跨店满减', group: '营业费用', editable: true },
+                { key: 'after_sale_cost', label: '售后费用', group: '营业费用', editable: true },
+                { key: 'tech_service_fee', label: '技术服务费', group: '营业费用', editable: true },
+                { key: 'other_cost', label: '其他费用', group: '营业费用', editable: true },
+                { key: 'platform_refund', label: '平台返还', group: '营业费用', editable: true },
+            ];
+            const numericCols = dataColumns.filter(c => c.editable).map(c => c.key);
 
             const addToast = (message, type = 'success') => {
                 const id = Date.now();
@@ -596,6 +814,192 @@
                 }
             };
 
+            // --- Data Management Helpers ---
+            const fmtNum = (val) => {
+                if (val === null || val === undefined || val === 0 || val === '') return '';
+                return Number(val).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            const getWeekday = (dateStr) => {
+                const days = ['日', '一', '二', '三', '四', '五', '六'];
+                return '周' + days[new Date(dateStr).getDay()];
+            };
+
+            const groupCss = (g) => {
+                if (g === '店铺基础数据') return 'group-base';
+                if (g === '付费推广数据') return 'group-promo';
+                if (g === '营业费用') return 'group-cost';
+                return 'group-empty';
+            };
+
+            const getGroupHeaders = () => {
+                const groups = [];
+                let current = null;
+                for (const col of dataColumns) {
+                    if (col.group === (current?.group || '')) {
+                        if (current) current.span++;
+                        else groups.push({ group: '', span: 1, css: 'group-empty' });
+                    } else {
+                        current = { group: col.group, span: 1, css: groupCss(col.group) };
+                        groups.push(current);
+                    }
+                }
+                groups.push({ group: '', span: 1, css: 'group-empty' }); // action column
+                return groups;
+            };
+
+            const getGroupedData = () => {
+                const map = new Map();
+                for (const row of dataRows) {
+                    const shop = row.shop_name;
+                    if (!map.has(shop)) map.set(shop, []);
+                    map.get(shop).push(row);
+                }
+                for (const [, arr] of map) {
+                    arr.sort((a, b) => a.data_date.localeCompare(b.data_date));
+                }
+                return map;
+            };
+
+            const getShopTotals = (shopRows) => {
+                const totals = {};
+                for (const col of numericCols) {
+                    totals[col] = shopRows.reduce((sum, r) => sum + (Number(r[col]) || 0), 0);
+                }
+                return totals;
+            };
+
+            // --- Data Management API ---
+            const fetchDataMeta = async () => {
+                try {
+                    const [shopRes, monthRes] = await Promise.all([
+                        apiFetch('/api/data/shops'),
+                        apiFetch('/api/data/months'),
+                    ]);
+                    setDataShops(shopRes.shops || []);
+                    setDataMonths(monthRes.months || []);
+                } catch(e) {}
+            };
+
+            const fetchDataRows = async (shops, month) => {
+                if (!month) return;
+                setDataLoading(true);
+                try {
+                    const params = new URLSearchParams();
+                    if (shops && shops.length > 0) params.set('shops', shops.join(','));
+                    params.set('month', month);
+                    const res = await apiFetch(`/api/data/query?${params}`);
+                    setDataRows(res.rows || []);
+                } catch(e) {} finally { setDataLoading(false); }
+            };
+
+            const handleDataUpload = async (event) => {
+                const files = event.target?.files || event.dataTransfer?.files;
+                if (!files || files.length === 0) return;
+                setUploadResult(null);
+                const formData = new FormData();
+                for (const f of files) formData.append('files', f);
+                try {
+                    const res = await apiFetch('/api/data/upload', { method: 'POST', body: formData });
+                    setUploadResult({ success: true, msg: `成功导入 ${res.count} 条数据` });
+                    addToast(`成功导入 ${res.count} 条数据`);
+                    await fetchDataMeta();
+                    if (selectedMonth) await fetchDataRows(selectedDataShops, selectedMonth);
+                } catch(e) {
+                    setUploadResult({ success: false, msg: '导入失败' });
+                } finally { setUploadDragover(false); }
+                if (event.target) event.target.value = '';
+            };
+
+            const startCellEdit = (row, field) => {
+                setEditingCell({ rowId: row.id, field });
+                setEditingValue(String(row[field] ?? 0));
+            };
+
+            const cancelCellEdit = () => {
+                setEditingCell(null);
+                setEditingValue('');
+            };
+
+            const saveCellEdit = async (row) => {
+                if (!editingCell) return;
+                const { field } = editingCell;
+                const newVal = Number(editingValue) || 0;
+                const oldVal = Number(row[field]) || 0;
+                if (newVal === oldVal) { cancelCellEdit(); return; }
+                try {
+                    const res = await apiFetch(`/api/data/rows/${row.id}`, {
+                        method: 'PUT', body: { [field]: newVal }
+                    });
+                    if (res.success) {
+                        setDataRows(prev => prev.map(r => r.id === row.id ? { ...r, [field]: res.row[field] } : r));
+                        addToast('已保存');
+                    }
+                } catch(e) { addToast('保存失败', 'error'); }
+                cancelCellEdit();
+            };
+
+            const handleDeleteRow = async (row) => {
+                if (!confirm(`确定删除 ${row.shop_name} ${row.data_date} 的数据？`)) return;
+                try {
+                    const res = await apiFetch(`/api/data/rows/${row.id}`, { method: 'DELETE' });
+                    if (res.success) {
+                        setDataRows(prev => prev.filter(r => r.id !== row.id));
+                        addToast('已删除');
+                    }
+                } catch(e) {}
+            };
+
+            const submitAddRow = async () => {
+                if (!addForm.shop_name || !addForm.data_date) {
+                    addToast('店铺名称和日期为必填项', 'error'); return;
+                }
+                try {
+                    await apiFetch('/api/data/rows', { method: 'POST', body: addForm });
+                    setShowAddModal(false);
+                    addToast('新增成功');
+                    await fetchDataMeta();
+                    if (selectedMonth) await fetchDataRows(selectedDataShops, selectedMonth);
+                } catch(e) {}
+            };
+
+            const handleExportXlsx = async () => {
+                if (!selectedMonth) { addToast('请先选择月份', 'error'); return; }
+                try {
+                    const params = new URLSearchParams();
+                    if (selectedDataShops.length > 0) params.set('shops', selectedDataShops.join(','));
+                    params.set('month', selectedMonth);
+                    const response = await fetch(`/api/data/export?${params}`, {
+                        headers: { 'X-Session-ID': sessionId }
+                    });
+                    if (!response.ok) throw new Error('导出失败');
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `店铺数据_${selectedMonth}.xlsx`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    addToast('导出成功');
+                } catch(e) { addToast('导出失败', 'error'); }
+            };
+
+            const toggleDataShop = (shop) => {
+                setSelectedDataShops(prev => {
+                    const next = prev.includes(shop) ? prev.filter(s => s !== shop) : [...prev, shop];
+                    fetchDataRows(next, selectedMonth);
+                    return next;
+                });
+            };
+
+            const selectAllDataShops = () => {
+                setSelectedDataShops(prev => {
+                    const next = prev.length === dataShops.length ? [] : [...dataShops];
+                    fetchDataRows(next, selectedMonth);
+                    return next;
+                });
+            };
+
             const fetchCookies = async () => {
                 try {
                     const data = await apiFetch('/api/cookies');
@@ -613,91 +1017,28 @@
             useEffect(() => {
                 fetchCookies();
                 fetchTasks();
+                fetchDataMeta();
             }, []);
 
             // --- Section 1: Cookie Actions ---
-            const [dragOver, setDragOver] = useState(false);
-
-            const uploadFiles = async (fileList) => {
-                const jsonFiles = Array.from(fileList).filter(f => f.name.endsWith('.json'));
-                if (jsonFiles.length === 0) {
-                    addToast('请选择 .json 文件', 'error');
-                    return;
-                }
+            const handleFileUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
                 const formData = new FormData();
-                jsonFiles.forEach(f => formData.append('files', f));
+                formData.append('file', file);
                 try {
-                    const data = await apiFetch('/api/cookies/upload', { method: 'POST', body: formData });
-                    const results = data.results || [];
-                    const ok = results.filter(r => r.cookie_id);
-                    const fail = results.filter(r => r.error);
-                    if (ok.length) addToast(`成功上传 ${ok.length} 个 Cookie`);
-                    if (fail.length) addToast(`${fail.length} 个文件失败: ${fail[0].error}`, 'error');
+                    await apiFetch('/api/cookies/upload', { method: 'POST', body: formData });
+                    addToast('上传成功');
                     fetchCookies();
                 } catch (e) {}
-            };
-
-            const handleFileUpload = (e) => {
-                uploadFiles(e.target.files);
                 e.target.value = '';
-            };
-
-            const handleDrop = (e) => {
-                e.preventDefault();
-                setDragOver(false);
-                uploadFiles(e.dataTransfer.files);
-            };
-
-            const handleDragOver = (e) => {
-                e.preventDefault();
-                setDragOver(true);
-            };
-
-            const handleDragLeave = () => setDragOver(false);
-
-            // SSE-based validation with log streaming
-            const _startValidateSSE = (taskId) => {
-                setValidateLogs([]);
-                setValidating(true);
-                const es = new EventSource(`/api/cookies/validate/${taskId}/stream?session_id=${sessionId}`);
-
-                es.addEventListener('log', (e) => {
-                    const log = JSON.parse(e.data);
-                    setValidateLogs(prev => [...prev, log]);
-                    // Auto-scroll
-                    setTimeout(() => {
-                        if (logPanelRef.current) {
-                            logPanelRef.current.scrollTop = logPanelRef.current.scrollHeight;
-                        }
-                    }, 50);
-                });
-
-                es.addEventListener('completed', (e) => {
-                    const data = JSON.parse(e.data);
-                    const results = data.results || {};
-                    const total = Object.keys(results).length;
-                    const passed = Object.values(results).filter(Boolean).length;
-                    setValidating(false);
-                    if (passed === total) {
-                        addToast(`验证完成: ${passed}/${total} 通过`);
-                    } else {
-                        addToast(`验证完成: ${passed}/${total} 通过`, 'error');
-                    }
-                    es.close();
-                    fetchCookies();
-                });
-
-                es.addEventListener('error', () => {
-                    setValidating(false);
-                    addToast('验证连接中断', 'error');
-                    es.close();
-                });
             };
 
             const handleValidate = async (id) => {
                 try {
-                    const { task_id } = await apiFetch(`/api/cookies/${id}/validate`, { method: 'POST' });
-                    _startValidateSSE(task_id);
+                    await apiFetch(`/api/cookies/${id}/validate`, { method: 'POST' });
+                    addToast('验证任务已启动');
+                    fetchCookies();
                 } catch (e) {}
             };
 
@@ -708,7 +1049,6 @@
                     addToast('已删除');
                     fetchCookies();
                     setSelectedCookies(prev => prev.filter(cId => cId !== id));
-                    setCheckedCookies(prev => prev.filter(cId => cId !== id));
                 } catch (e) {}
             };
 
@@ -723,88 +1063,6 @@
                     addToast('修改成功');
                     fetchCookies();
                 } catch (e) {}
-            };
-
-            const handleDownloadCookie = (id) => {
-                fetch(`/api/cookies/${id}/download`, {
-                    headers: { 'X-Session-ID': sessionId }
-                })
-                .then(res => {
-                    if (!res.ok) throw new Error('下载失败');
-                    const disposition = res.headers.get('Content-Disposition') || '';
-                    const match = disposition.match(/filename\*?=(?:UTF-8'')?(.+)/i);
-                    const filename = match ? decodeURIComponent(match[1]) : `cookie_${id}.json`;
-                    return res.blob().then(blob => ({ blob, filename }));
-                })
-                .then(({ blob, filename }) => {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                })
-                .catch(err => addToast(err.message, 'error'));
-            };
-
-            // --- Cookie table checkbox ---
-            const toggleCheck = (cookieId) => {
-                setCheckedCookies(prev =>
-                    prev.includes(cookieId) ? prev.filter(id => id !== cookieId) : [...prev, cookieId]
-                );
-            };
-            const toggleCheckAll = () => {
-                if (checkedCookies.length === cookies.length && cookies.length > 0) {
-                    setCheckedCookies([]);
-                } else {
-                    setCheckedCookies(cookies.map(c => c.cookie_id));
-                }
-            };
-
-            // --- Batch actions ---
-            const handleBatchValidate = async () => {
-                if (checkedCookies.length === 0) return;
-                try {
-                    const { task_id } = await apiFetch('/api/cookies/batch/validate', {
-                        method: 'POST', body: { cookie_ids: checkedCookies }
-                    });
-                    _startValidateSSE(task_id);
-                } catch (e) {}
-            };
-
-            const handleBatchDelete = async () => {
-                if (checkedCookies.length === 0) return;
-                if (!confirm(`确定删除选中的 ${checkedCookies.length} 个 Cookie 吗？`)) return;
-                try {
-                    await apiFetch('/api/cookies/batch/delete', {
-                        method: 'POST', body: { cookie_ids: checkedCookies }
-                    });
-                    addToast(`已删除 ${checkedCookies.length} 个 Cookie`);
-                    setCheckedCookies([]);
-                    setSelectedCookies(prev => prev.filter(id => !checkedCookies.includes(id)));
-                    fetchCookies();
-                } catch (e) {}
-            };
-
-            const handleBatchDownload = async () => {
-                if (checkedCookies.length === 0) return;
-                try {
-                    const res = await fetch('/api/cookies/batch/download', {
-                        method: 'POST',
-                        headers: { 'X-Session-ID': sessionId, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ cookie_ids: checkedCookies }),
-                    });
-                    if (!res.ok) throw new Error('下载失败');
-                    const blob = await res.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'cookies_batch.zip';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                } catch (err) {
-                    addToast(err.message, 'error');
-                }
             };
 
             const startQrLogin = async () => {
@@ -942,10 +1200,29 @@
                             ? data.report
                             : [data.report];
                     setCleanedReport(reports);
-                    addToast(silent ? '已自动传入“数据清洗与处理”步骤' : '清洗成功');
+                    addToast(silent ? '已自动清洗并入库' : '清洗成功');
+                    // Refresh data management after auto-import
+                    await fetchDataMeta();
+                    if (selectedMonth) await fetchDataRows(selectedDataShops, selectedMonth);
                 } catch (e) {}
             };
 
+            const handleManualClean = async (e) => {
+                const files = e.target.files;
+                if (!files.length) return;
+                
+                const formData = new FormData();
+                for (let i = 0; i < files.length; i++) {
+                    formData.append('files', files[i]);
+                }
+
+                try {
+                    const data = await apiFetch('/api/clean', { method: 'POST', body: formData });
+                    setCleanedReport(data);
+                    addToast('清洗成功');
+                } catch (e) {}
+                e.target.value = '';
+            };
 
             const downloadReport = () => {
                 if (!cleanedReport) return;
@@ -971,7 +1248,7 @@
                             <div className="nav-links">
                                 <a href="#cookies">Cookie</a>
                                 <a href="#crawl">采集</a>
-                                <a href="#clean">清洗</a>
+                                <a href="#data">数据</a>
                             </div>
                         </nav>
                     </header>
@@ -980,50 +1257,22 @@
                     <section id="cookies">
                         <div className="section-title">
                             <span>1. Cookie 账号管理</span>
-                            <button className="btn btn-primary btn-sm" onClick={startQrLogin}>+ 扫码登录</button>
+                            <div className="flex gap-12">
+                                <input 
+                                    type="file" 
+                                    id="cookieUpload" 
+                                    style={{display: 'none'}} 
+                                    onChange={handleFileUpload} 
+                                    accept=".json"
+                                />
+                                <button className="btn btn-sm" onClick={() => document.getElementById('cookieUpload').click()}>上传 JSON</button>
+                                <button className="btn btn-primary btn-sm" onClick={startQrLogin}>+ 扫码登录</button>
+                            </div>
                         </div>
                         <div className="card">
-                            {/* Drop zone for batch upload */}
-                            <div
-                                className={`drop-zone ${dragOver ? 'drag-over' : ''}`}
-                                onDrop={handleDrop}
-                                onDragOver={handleDragOver}
-                                onDragLeave={handleDragLeave}
-                                onClick={() => document.getElementById('cookieUpload').click()}
-                            >
-                                <div className="drop-zone-icon">📂</div>
-                                <div>拖拽 JSON 文件到此处，或点击选择文件</div>
-                                <div style={{fontSize: '12px', marginTop: '4px', color: 'var(--text-secondary)'}}>支持批量上传多个 storage_state 文件</div>
-                            </div>
-                            <input
-                                type="file"
-                                id="cookieUpload"
-                                style={{display: 'none'}}
-                                onChange={handleFileUpload}
-                                accept=".json"
-                                multiple
-                            />
-                            {/* Batch toolbar — visible when any cookie is checked */}
-                            {checkedCookies.length > 0 && (
-                                <div className="batch-toolbar">
-                                    <span className="batch-count">已选 {checkedCookies.length} 项</span>
-                                    <button className="btn btn-sm btn-primary" onClick={handleBatchValidate} disabled={validating}>
-                                        {validating ? '验证中...' : '批量验证'}
-                                    </button>
-                                    <button className="btn btn-sm" onClick={handleBatchDownload}>批量下载</button>
-                                    <button className="btn btn-sm btn-danger" onClick={handleBatchDelete}>批量删除</button>
-                                </div>
-                            )}
                             <table>
                                 <thead>
                                     <tr>
-                                        <th className="col-check">
-                                            <input
-                                                type="checkbox"
-                                                checked={cookies.length > 0 && checkedCookies.length === cookies.length}
-                                                onChange={toggleCheckAll}
-                                            />
-                                        </th>
                                         <th>店铺名称</th>
                                         <th>状态</th>
                                         <th>Cookie 数量</th>
@@ -1032,16 +1281,9 @@
                                 </thead>
                                 <tbody>
                                     {cookies.length === 0 ? (
-                                        <tr><td colSpan="5" className="empty-state">暂无数据，请扫码登录或上传 Cookie</td></tr>
+                                        <tr><td colSpan="4" className="empty-state">暂无数据，请扫码登录或上传 Cookie</td></tr>
                                     ) : cookies.map(c => (
                                         <tr key={c.cookie_id}>
-                                            <td className="col-check">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={checkedCookies.includes(c.cookie_id)}
-                                                    onChange={() => toggleCheck(c.cookie_id)}
-                                                />
-                                            </td>
                                             <td className="mono" style={{fontWeight: 500}}>
                                                 <span 
                                                     style={{cursor: 'pointer', padding: '4px 0', borderBottom: '1px dashed var(--border-color)'}}
@@ -1059,8 +1301,7 @@
                                             <td className="mono text-secondary">{c.cookie_count}</td>
                                             <td className="text-right">
                                                 <div className="flex gap-12 justify-end">
-                                                    <button className="btn btn-sm" onClick={() => handleValidate(c.cookie_id)} disabled={validating}>验证</button>
-                                                    <button className="btn btn-sm" onClick={() => handleDownloadCookie(c.cookie_id)}>下载</button>
+                                                    <button className="btn btn-sm" onClick={() => handleValidate(c.cookie_id)}>验证</button>
                                                     <button className="btn btn-sm btn-danger" onClick={() => handleDelete(c.cookie_id)}>删除</button>
                                                 </div>
                                             </td>
@@ -1068,23 +1309,6 @@
                                     ))}
                                 </tbody>
                             </table>
-
-                            {/* Validation log panel */}
-                            {validateLogs.length > 0 && (
-                                <div className="log-panel" ref={logPanelRef}>
-                                    {validateLogs.map((log, i) => {
-                                        const prefix = log.level === 'ok' ? '✓' : log.level === 'fail' ? '✗' : log.level === 'step' ? '▸' : ' ';
-                                        return (
-                                            <div key={i} className="log-line" data-level={log.level}>
-                                                {prefix} {log.message}
-                                            </div>
-                                        );
-                                    })}
-                                    {validating && (
-                                        <div className="log-line" data-level="info" style={{opacity: 0.6}}>⏳ 验证进行中...</div>
-                                    )}
-                                </div>
-                            )}
                         </div>
                     </section>
 
@@ -1167,29 +1391,181 @@
                         </div>
                     </section>
 
-                    {/* Section 3: 数据清洗 */}
-                    <section id="clean">
-                        <div className="section-title">3. 数据清洗与处理</div>
-                        <div className="card">
-                            {cleanedReport && (
-                                <div className="mt-24">
-                                    <div className="flex justify-between items-center mb-16">
-                                        <span style={{fontSize: '16px', fontWeight: 600}}>清洗报告预览</span>
-                                        <button className="btn btn-sm btn-primary" onClick={downloadReport}>下载清洗结果 (JSON)</button>
+                    {/* Section 3: 数据管理 */}
+                    <section id="data">
+                        <div className="section-title">
+                            <span>3. 数据管理与导出</span>
+                            <div className="flex gap-12">
+                                <button className="btn btn-sm btn-primary" onClick={() => {
+                                    setAddForm({
+                                        shop_name: selectedDataShops.length === 1 ? selectedDataShops[0] : '',
+                                        data_date: '',
+                                        payment_amount: 0, promotion_cost: 0, marketing_cost: 0,
+                                        after_sale_cost: 0, tech_service_fee: 0, other_cost: 0, platform_refund: 0,
+                                    });
+                                    setShowAddModal(true);
+                                }}>+ 新增数据</button>
+                                <button className="btn btn-sm" style={{background: 'rgba(52,199,89,0.15)', color: '#248a3d'}} onClick={handleExportXlsx} disabled={!selectedMonth}>导出 XLSX</button>
+                            </div>
+                        </div>
+
+                        {/* Upload Zone */}
+                        <div
+                            className={`upload-zone ${uploadDragover ? 'dragover' : ''}`}
+                            onDragOver={(e) => { e.preventDefault(); setUploadDragover(true); }}
+                            onDragLeave={() => setUploadDragover(false)}
+                            onDrop={(e) => { e.preventDefault(); handleDataUpload(e); }}
+                            onClick={() => document.getElementById('dataFileInput').click()}
+                        >
+                            <div className="icon">📁</div>
+                            <p>点击或拖拽 JSON 文件到此处上传</p>
+                            <input id="dataFileInput" type="file" accept=".json" multiple style={{display:'none'}} onChange={handleDataUpload} />
+                        </div>
+                        {uploadResult && (
+                            <div className={`upload-result ${uploadResult.success ? '' : 'error'}`}>{uploadResult.msg}</div>
+                        )}
+
+                        {/* Toolbar */}
+                        <div className="data-toolbar">
+                            <div className="data-toolbar-top">
+                                <div className="filter-group">
+                                    <label>月份</label>
+                                    <input type="month" className="filter-input" value={selectedMonth} onChange={(e) => {
+                                        setSelectedMonth(e.target.value);
+                                        fetchDataRows(selectedDataShops, e.target.value);
+                                    }} />
+                                </div>
+                            </div>
+                            <div className="data-toolbar-bottom">
+                                <div className="shop-header">
+                                    <div className="filter-group">
+                                        <label style={{marginBottom: 0}}>店铺筛选</label>
                                     </div>
-                                    <div style={{
-                                        overflowX: 'auto', 
-                                        borderRadius: '12px',
-                                        background: '#f5f5f7', 
-                                        padding: '20px',
-                                        border: '1px solid rgba(0,0,0,0.05)'
-                                    }}>
-                                        <pre style={{fontSize: '13px', color: '#1d1d1f', margin: 0}}>{JSON.stringify(cleanedReport, null, 2)}</pre>
+                                    <span className="shop-count">已选 {selectedDataShops.length} / {dataShops.length} 个店铺</span>
+                                </div>
+                                <div className="chip-list">
+                                    <span className={`chip ${selectedDataShops.length === dataShops.length && dataShops.length > 0 ? 'active' : ''}`} onClick={selectAllDataShops}>全部</span>
+                                    {dataShops.map(shop => (
+                                        <span key={shop} className={`chip ${selectedDataShops.includes(shop) ? 'active' : ''}`} onClick={() => toggleDataShop(shop)}>{shop}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Data Tables */}
+                        {dataLoading ? (
+                            <div className="loading-state"><div className="spinner"></div> 加载中...</div>
+                        ) : dataRows.length === 0 ? (
+                            <div className="empty-state" style={{padding: '60px 20px'}}>
+                                <div style={{fontSize: '48px', marginBottom: '12px'}}>📊</div>
+                                <p>暂无数据，请上传 JSON 文件或选择其他筛选条件</p>
+                            </div>
+                        ) : (
+                            Array.from(getGroupedData()).map(([shop, shopRows]) => (
+                                <div key={shop} style={{marginBottom: '24px'}}>
+                                    <div className="data-table-wrapper">
+                                        <div className="shop-table-title">{shop}</div>
+                                        <table className="data-table">
+                                            <colgroup>
+                                                <col className="col-date" />
+                                                <col className="col-weekday" />
+                                                {numericCols.map(c => <col key={c} className="col-num" />)}
+                                                <col className="col-action" />
+                                            </colgroup>
+                                            <thead>
+                                                <tr className="group-header-row">
+                                                    {getGroupHeaders().map((g, i) => (
+                                                        <th key={i} colSpan={g.span} className={g.css}>{g.group}</th>
+                                                    ))}
+                                                </tr>
+                                                <tr className="col-header-row">
+                                                    {dataColumns.map(col => <th key={col.key}>{col.label}</th>)}
+                                                    <th>操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {shopRows.map(row => (
+                                                    <tr key={row.id} className={!row.payment_amount && !row.promotion_cost ? 'no-data' : ''}>
+                                                        <td style={{textAlign:'center', fontWeight: 500}}>{row.data_date}</td>
+                                                        <td style={{textAlign:'center', fontWeight: 500}}>{getWeekday(row.data_date)}</td>
+                                                        {numericCols.map(col => (
+                                                            <td key={col} className="editable" onDoubleClick={() => startCellEdit(row, col)}>
+                                                                {editingCell && editingCell.rowId === row.id && editingCell.field === col ? (
+                                                                    <input
+                                                                        className="cell-input"
+                                                                        value={editingValue}
+                                                                        onChange={(e) => setEditingValue(e.target.value)}
+                                                                        onBlur={() => saveCellEdit(row)}
+                                                                        onKeyDown={(e) => {
+                                                                            if (e.key === 'Enter') saveCellEdit(row);
+                                                                            else if (e.key === 'Escape') cancelCellEdit();
+                                                                        }}
+                                                                        autoFocus
+                                                                    />
+                                                                ) : fmtNum(row[col])}
+                                                            </td>
+                                                        ))}
+                                                        <td style={{textAlign:'center', padding: '4px 6px'}}>
+                                                            <button className="btn-icon" title="删除" onClick={() => handleDeleteRow(row)}>✕</button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {/* Summary Row */}
+                                                <tr className="summary-row">
+                                                    <td style={{textAlign:'center'}}>合计</td>
+                                                    <td></td>
+                                                    {numericCols.map(col => (
+                                                        <td key={col}>{fmtNum(getShopTotals(shopRows)[col])}</td>
+                                                    ))}
+                                                    <td></td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </div>
-                            )}
-                        </div>
+                            ))
+                        )}
                     </section>
+
+                    {/* Add Data Modal */}
+                    {showAddModal && (
+                        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowAddModal(false); }}>
+                            <div className="modal" style={{width: 'min(90vw, 520px)', textAlign: 'left'}}>
+                                <h2 style={{marginBottom: '20px', fontSize: '20px', fontWeight: 600}}>新增数据</h2>
+                                <div className="form-grid">
+                                    <label>店铺名称</label>
+                                    {dataShops.length > 0 ? (
+                                        <select value={addForm.shop_name} onChange={(e) => setAddForm({...addForm, shop_name: e.target.value})}>
+                                            <option value="" disabled>请选择店铺</option>
+                                            {dataShops.map(s => <option key={s} value={s}>{s}</option>)}
+                                        </select>
+                                    ) : (
+                                        <input value={addForm.shop_name} onChange={(e) => setAddForm({...addForm, shop_name: e.target.value})} placeholder="输入店铺名称" />
+                                    )}
+                                    <label>数据日期</label>
+                                    <input type="date" value={addForm.data_date} onChange={(e) => setAddForm({...addForm, data_date: e.target.value})} />
+                                    <label>支付金额</label>
+                                    <input type="number" step="0.01" value={addForm.payment_amount} onChange={(e) => setAddForm({...addForm, payment_amount: Number(e.target.value)})} />
+                                    <label>全站推广</label>
+                                    <input type="number" step="0.01" value={addForm.promotion_cost} onChange={(e) => setAddForm({...addForm, promotion_cost: Number(e.target.value)})} />
+                                    <label>评价有礼+跨店满减</label>
+                                    <input type="number" step="0.01" value={addForm.marketing_cost} onChange={(e) => setAddForm({...addForm, marketing_cost: Number(e.target.value)})} />
+                                    <label>售后费用</label>
+                                    <input type="number" step="0.01" value={addForm.after_sale_cost} onChange={(e) => setAddForm({...addForm, after_sale_cost: Number(e.target.value)})} />
+                                    <label>技术服务费</label>
+                                    <input type="number" step="0.01" value={addForm.tech_service_fee} onChange={(e) => setAddForm({...addForm, tech_service_fee: Number(e.target.value)})} />
+                                    <label>其他费用</label>
+                                    <input type="number" step="0.01" value={addForm.other_cost} onChange={(e) => setAddForm({...addForm, other_cost: Number(e.target.value)})} />
+                                    <label>平台返还</label>
+                                    <input type="number" step="0.01" value={addForm.platform_refund} onChange={(e) => setAddForm({...addForm, platform_refund: Number(e.target.value)})} />
+                                </div>
+                                <div className="modal-actions">
+                                    <button className="btn btn-sm" onClick={() => setShowAddModal(false)}>取消</button>
+                                    <button className="btn btn-sm btn-primary" onClick={submitAddRow}>确认新增</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
 
 

@@ -54,10 +54,12 @@ async def health():
 from pdd_crawler.web.cookie_api import router as cookie_router  # noqa: E402
 from pdd_crawler.web.task_api import router as task_router  # noqa: E402
 from pdd_crawler.web.clean_api import router as clean_router  # noqa: E402
+from pdd_crawler.web.data_api import router as data_router  # noqa: E402
 
 app.include_router(cookie_router, prefix="/api")
 app.include_router(task_router, prefix="/api")
 app.include_router(clean_router, prefix="/api")
+app.include_router(data_router, prefix="/api")
 
 
 # ── Static files (React SPA) — must be last ──────────────

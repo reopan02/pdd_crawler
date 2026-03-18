@@ -22,10 +22,6 @@ import re
 from pdd_crawler import config
 
 
-class _NavRetryError(Exception):
-    """Sentinel exception to break out of try block into retry logic."""
-
-
 def _extract_and_cleanup(zip_path: Path) -> Path | None:
     """Extract zip file to same directory, delete zip, return first extracted file."""
     if not zip_path.exists():
@@ -328,114 +324,56 @@ async def _select_yesterday_date(
                 except Exception:
                     pass
         else:
-            # 4002 mode: no "昨天" button → click yesterday's date cell in
-            # the calendar, then click "确认".
-            #
-            # The picker's default date (from the hidden input) tells us which
-            # month the calendar is currently displaying.  If yesterday is in
-            # the same month we can click the day directly.  If it's a
-            # different month we attempt to navigate, but if the calendar
-            # header is unreadable (Beast UI custom component) we use the
-            # picker input value to infer the displayed month instead.
-            print("[账单-日期] 无'昨天'按钮, 使用日历点击模式 (4002模式)")
+            # 4002 mode: no "昨天" button → set date via JS injection.
+            # The calendar UI is a custom Beast component whose DOM structure
+            # is unpredictable (header selectors return empty, month navigation
+            # is unreliable).  Instead we directly set the hidden input value
+            # and trigger React's change pipeline.
+            print("[账单-日期] 无'昨天'按钮, 使用JS注入模式 (4002模式)")
 
-            # Determine the calendar's currently displayed month from the
-            # picker input value (which we already read above).
-            picker_month: date | None = None
-            if picker_date_str:
-                try:
-                    picker_month = datetime.strptime(
-                        picker_date_str, "%Y-%m-%d"
-                    ).date().replace(day=1)
-                except ValueError:
-                    pass
+            # Close the picker popup first (Escape key)
+            await page.keyboard.press("Escape")
+            await _human_delay(0.3, 0.6)
 
-            target_month = pdd_yesterday.replace(day=1)
+            yesterday_str = pdd_yesterday.isoformat()  # e.g. "2026-03-15"
+            target_value = (
+                f"{yesterday_str} 00:00:00 ~ {yesterday_str} 23:59:59"
+            )
 
-            # Navigate months if needed
-            if picker_month and picker_month != target_month:
-                # Calculate how many months to go back
-                months_diff = (
-                    (picker_month.year - target_month.year) * 12
-                    + picker_month.month - target_month.month
-                )
-                if months_diff > 0 and months_diff <= 12:
-                    print(
-                        f"[账单-日期] 需要向前翻{months_diff}个月: "
-                        f"{picker_month.strftime('%Y-%m')} → "
-                        f"{target_month.strftime('%Y-%m')}"
-                    )
-                    nav_ok = True
-                    for _i in range(months_diff):
-                        prev_clicked = False
-                        for prev_sel in (
-                            '[class*="prev-month"]',
-                            '[class*="prev"][class*="btn"]',
-                            '[class*="calendar"] [class*="prev"]',
-                            '[class*="picker"] [class*="prev"]',
-                            'button[class*="prev"]',
-                            '[class*="header"] [class*="left"]',
-                            '[aria-label="prev month"]',
-                            '[aria-label="上一月"]',
-                        ):
-                            loc = page.locator(prev_sel)
-                            if await loc.count() > 0:
-                                await loc.first.click()
-                                await _human_delay(0.3, 0.6)
-                                prev_clicked = True
-                                break
-                        if not prev_clicked:
-                            print("[账单-日期] 未找到上一月按钮, 停止翻月")
-                            nav_ok = False
-                            break
-                    if nav_ok:
-                        print(f"[账单-日期] 已翻月{months_diff}次")
-                elif months_diff > 12:
-                    print(
-                        f"[账单-日期] 月份差距过大({months_diff}), 跳过翻月"
-                    )
-            else:
-                print("[账单-日期] 日历已显示目标月份, 无需翻月")
+            # Find the date input element
+            input_sel = '[data-testid="beast-core-rangePicker-htmlInput"]'
+            input_loc = page.locator(input_sel)
+            if await input_loc.count() == 0:
+                # Fallback selectors
+                for ph in ("开始日期-结束日期", "请选择时间范围"):
+                    input_loc = page.get_by_placeholder(ph)
+                    if await input_loc.count() > 0:
+                        break
 
-            # ── Select the day cell ──
-            day_str = str(pdd_yesterday.day)
-            day_cell = None
-            tables = page.locator("table")
-            table_count = await tables.count()
-
-            for t_idx in range(table_count):
-                table = tables.nth(t_idx)
-                cells = table.locator("td")
-                cell_count = await cells.count()
-                for c_idx in range(cell_count):
-                    cell = cells.nth(c_idx)
-                    cell_text = (await cell.inner_text()).strip()
-                    if cell_text == day_str:
-                        cursor = await cell.evaluate(
-                            "el => window.getComputedStyle(el).cursor"
-                        )
-                        if cursor == "pointer":
-                            day_cell = cell
-                            break
-                if day_cell is not None:
-                    break
-
-            if day_cell is None:
-                print(
-                    f"[账单-日期] 未在日历中找到昨天({day_str}号)"
-                    f"的可点击单元格"
-                )
+            if await input_loc.count() == 0:
+                print("[账单-日期] 4002模式: 未找到日期输入框")
                 return ""
 
-            await day_cell.dblclick()
-            await _human_delay(0.5, 1.0)
-            print(f"[账单-日期] 已双击日历中的{day_str}号")
+            # Set value via JS and trigger React change events.
+            # React overrides the native value setter, so we must use the
+            # native HTMLInputElement.prototype setter to bypass it, then
+            # dispatch 'input' and 'change' events.
+            js_set_date = """
+                (el) => {
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    nativeSetter.call(el, '%s');
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            """ % target_value
 
-            confirm_btn = page.locator("button:has-text('确认')")
-            if await confirm_btn.count() > 0:
-                await confirm_btn.first.click()
-                await _human_delay(0.5, 1.0)
-                print("[账单-日期] 已点击'确认'")
+            await input_loc.first.evaluate(js_set_date)
+            await _human_delay(0.5, 1.0)
+            print(
+                f"[账单-日期] 已通过JS设置日期输入值: {target_value}"
+            )
 
         # 3) Click "查询" to apply the date filter
         query_btn = page.locator("button:has-text('查询')")
@@ -604,8 +542,7 @@ async def _navigate_to_bill_tab(
                 print(
                     f"[账单-导航] 第{attempt}次尝试, Step 1: SSO重定向未到达cashier: {sso_url}"
                 )
-                # Fall through to retry logic below
-                raise _NavRetryError("SSO未到达cashier")
+                continue
             print(
                 f"[账单-导航] 第{attempt}次尝试, Step 1: SSO完成, 已到达cashier: {sso_url}"
             )
@@ -638,7 +575,7 @@ async def _navigate_to_bill_tab(
                 print(
                     f"[账单-导航] 第{attempt}次尝试, Step 2: 未能停留在cashier域名: {final_url}"
                 )
-                raise _NavRetryError("未停留在cashier域名")
+                continue
 
             # ── Step 3: Verify no anti-bot block ──
             print(f"[账单-导航] 第{attempt}次尝试, Step 3: 验证页面正常: {final_url}")
@@ -649,22 +586,19 @@ async def _navigate_to_bill_tab(
                     body_text, final_url, f"bill_verify_attempt_{attempt}"
                 )
                 print(f"[账单-导航] 第{attempt}次尝试, Step 3: 页面疑似风控，准备重试")
-                raise _NavRetryError("页面疑似风控")
+                continue
 
             await _take_debug_screenshot(page, f"bill_success_attempt{attempt}", None)
             print(f"[账单-导航] ✅ 第{attempt}次尝试成功, 已到达账单页面: {final_url}")
             return True
 
-        except _NavRetryError:
-            pass  # handled below
         except Exception as e:
             print(f"[账单-导航] 第{attempt}次尝试异常: {e}")
-
-        # ── Retry backoff (only reached on failure) ──
-        if attempt < config.NAV_MAX_RETRIES:
-            backoff = config.NAV_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-            print(f"[账单-导航] 第{attempt}次尝试失败，{backoff:.1f}s后重试")
-            await asyncio.sleep(backoff)
+        finally:
+            if attempt < config.NAV_MAX_RETRIES:
+                backoff = config.NAV_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"[账单-导航] 第{attempt}次尝试失败，{backoff:.1f}s后重试")
+                await asyncio.sleep(backoff)
 
     if last_page is not None:
         await _take_debug_screenshot(last_page, "bill_all_retries_failed", None)
