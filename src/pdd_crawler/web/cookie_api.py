@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import tempfile
 import uuid
+import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
+from fastapi.responses import Response
 from sse_starlette.sse import EventSourceResponse
 
 from pdd_crawler.web.deps import get_session_id, browser_semaphore
@@ -49,29 +53,46 @@ def _extract_shop_name_from_cookies(data: dict) -> str:
 
 
 @router.post("/cookies/upload")
-async def upload_cookie(request: Request, file: UploadFile = File(...)):
-    """Upload a Playwright storage_state JSON file."""
+async def upload_cookie(
+    request: Request, files: list[UploadFile] = File(...),
+):
+    """Upload one or more Playwright storage_state JSON files."""
     session_id = get_session_id(request)
+    results = []
 
-    content = await file.read()
-    try:
-        data = json.loads(content.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise HTTPException(status_code=422, detail=f"无效的 JSON 文件: {e}")
+    for file in files:
+        content = await file.read()
+        try:
+            data = json.loads(content.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            results.append({"filename": file.filename, "error": f"无效的 JSON: {e}"})
+            continue
 
-    valid, msg = _validate_storage_state(data)
-    if not valid:
-        raise HTTPException(status_code=422, detail=f"无效的 storage_state 格式: {msg}")
+        valid, msg = _validate_storage_state(data)
+        if not valid:
+            results.append({"filename": file.filename, "error": f"格式错误: {msg}"})
+            continue
 
-    shop_name = _extract_shop_name_from_cookies(data)
-    entry = store.add_cookie(session_id, shop_name, data)
+        # Use the original filename as shop name (strip common suffixes)
+        raw_name = file.filename or ""
+        shop_name = raw_name
+        for suffix in ("_cookies.json", ".json"):
+            if shop_name.lower().endswith(suffix):
+                shop_name = shop_name[: -len(suffix)]
+                break
+        shop_name = shop_name.strip()
+        if not shop_name:
+            shop_name = _extract_shop_name_from_cookies(data)
+        entry = store.add_cookie(session_id, shop_name, data)
 
-    return {
-        "status": "ok",
-        "cookie_id": entry.cookie_id,
-        "shop_name": entry.shop_name,
-        "cookie_count": len(data.get("cookies", [])),
-    }
+        results.append({
+            "filename": file.filename,
+            "cookie_id": entry.cookie_id,
+            "shop_name": entry.shop_name,
+            "cookie_count": len(data.get("cookies", [])),
+        })
+
+    return {"status": "ok", "results": results}
 
 
 @router.get("/cookies")
@@ -92,48 +113,136 @@ async def list_cookies(request: Request):
     }
 
 
+# ── Batch Operations (MUST be before {cookie_id} routes) ──
+
+
+@router.post("/cookies/batch/validate")
+async def batch_validate(request: Request):
+    """Start batch validation for multiple cookies. Returns task_id for SSE."""
+    session_id = get_session_id(request)
+    body = await request.json()
+    cookie_ids: list[str] = body.get("cookie_ids", [])
+    if not cookie_ids:
+        raise HTTPException(status_code=422, detail="cookie_ids 不能为空")
+
+    for cid in cookie_ids:
+        if store.get_cookie(session_id, cid) is None:
+            raise HTTPException(status_code=404, detail=f"Cookie {cid} 不存在")
+
+    task = store.create_task(session_id, "validate")
+    task.data["cookie_ids"] = cookie_ids
+    asyncio.create_task(
+        _validate_background(session_id, task.task_id, cookie_ids)
+    )
+    return {"task_id": task.task_id}
+
+
+@router.post("/cookies/batch/delete")
+async def batch_delete(request: Request):
+    """Delete multiple cookies at once."""
+    session_id = get_session_id(request)
+    body = await request.json()
+    cookie_ids: list[str] = body.get("cookie_ids", [])
+    if not cookie_ids:
+        raise HTTPException(status_code=422, detail="cookie_ids 不能为空")
+
+    deleted = []
+    not_found = []
+    for cid in cookie_ids:
+        if store.remove_cookie(session_id, cid):
+            deleted.append(cid)
+        else:
+            not_found.append(cid)
+
+    return {"status": "ok", "deleted": deleted, "not_found": not_found}
+
+
+@router.post("/cookies/batch/download")
+async def batch_download(request: Request):
+    """Download multiple cookies as a single ZIP file."""
+    session_id = get_session_id(request)
+    body = await request.json()
+    cookie_ids: list[str] = body.get("cookie_ids", [])
+    if not cookie_ids:
+        raise HTTPException(status_code=422, detail="cookie_ids 不能为空")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for cid in cookie_ids:
+            entry = store.get_cookie(session_id, cid)
+            if entry is None:
+                continue
+            filename = f"{entry.shop_name}_cookies.json"
+            content = json.dumps(entry.storage_state, ensure_ascii=False, indent=2)
+            zf.writestr(filename, content)
+
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=cookies_batch.zip"
+        },
+    )
+
+
+@router.get("/cookies/validate/{task_id}/stream")
+async def validate_stream(request: Request, task_id: str):
+    """SSE stream for cookie validation logs."""
+    session_id = get_session_id(request)
+
+    async def event_generator():
+        task = store.get_task(session_id, task_id)
+        if task is None:
+            yield {"event": "error", "data": json.dumps({"error": "任务不存在"})}
+            return
+
+        last_log_idx = 0
+        while task.status in ("pending", "running"):
+            logs = task.data.get("logs", [])
+            while last_log_idx < len(logs):
+                yield {
+                    "event": "log",
+                    "data": json.dumps(logs[last_log_idx]),
+                }
+                last_log_idx += 1
+            await asyncio.sleep(0.5)
+
+        # Flush remaining logs
+        logs = task.data.get("logs", [])
+        while last_log_idx < len(logs):
+            yield {"event": "log", "data": json.dumps(logs[last_log_idx])}
+            last_log_idx += 1
+
+        # Final event
+        yield {
+            "event": "completed",
+            "data": json.dumps({
+                "status": task.status,
+                "results": task.data.get("results", {}),
+            }),
+        }
+
+    return EventSourceResponse(event_generator())
+
+
+# ── Single Cookie Operations ({cookie_id} routes) ────────
+
+
 @router.post("/cookies/{cookie_id}/validate")
 async def validate_cookie(request: Request, cookie_id: str):
-    """Validate a cookie by launching a headless browser and checking redirect."""
+    """Start single cookie validation. Returns task_id for SSE log streaming."""
     session_id = get_session_id(request)
     entry = store.get_cookie(session_id, cookie_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Cookie 不存在")
 
-    entry.status = "validating"
-
-    tmp_path = None
-    try:
-        async with browser_semaphore:
-            # Write storage_state to temp file for crawl4ai
-            tmp = tempfile.NamedTemporaryFile(
-                suffix=".json", delete=False, mode="w", encoding="utf-8"
-            )
-            json.dump(entry.storage_state, tmp)
-            tmp.close()
-            tmp_path = Path(tmp.name)
-
-            from pdd_crawler.cookie_manager import validate_cookies
-
-            is_valid = await validate_cookies(tmp_path)
-
-        entry.status = "valid" if is_valid else "invalid"
-        return {
-            "cookie_id": cookie_id,
-            "status": entry.status,
-            "valid": is_valid,
-        }
-    except Exception as e:
-        entry.status = "invalid"
-        return {
-            "cookie_id": cookie_id,
-            "status": "invalid",
-            "valid": False,
-            "error": str(e),
-        }
-    finally:
-        if tmp_path and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+    task = store.create_task(session_id, "validate")
+    task.data["cookie_ids"] = [cookie_id]
+    asyncio.create_task(
+        _validate_background(session_id, task.task_id, [cookie_id])
+    )
+    return {"task_id": task.task_id}
 
 
 @router.delete("/cookies/{cookie_id}")
@@ -161,6 +270,90 @@ async def rename_cookie(request: Request, cookie_id: str):
 
     entry.shop_name = new_name
     return {"status": "ok", "cookie_id": cookie_id, "shop_name": new_name}
+
+
+@router.get("/cookies/{cookie_id}/download")
+async def download_cookie(request: Request, cookie_id: str):
+    """Download a cookie's storage_state as a JSON file."""
+    session_id = get_session_id(request)
+    entry = store.get_cookie(session_id, cookie_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Cookie 不存在")
+
+    content = json.dumps(entry.storage_state, ensure_ascii=False, indent=2)
+    filename = f"{entry.shop_name}_cookies.json"
+    encoded_filename = quote(filename)
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+        },
+    )
+
+
+# ── Background helpers ────────────────────────────────────
+
+
+async def _validate_background(
+    session_id: str, task_id: str, cookie_ids: list[str]
+) -> None:
+    """Background: validate one or more cookies with log streaming."""
+    task = store.get_task(session_id, task_id)
+    if task is None:
+        return
+
+    task.status = "running"
+    task.data.setdefault("logs", [])
+    task.data.setdefault("results", {})
+
+    def _add_log(cookie_id: str, level: str, message: str) -> None:
+        task.data["logs"].append({
+            "cookie_id": cookie_id,
+            "level": level,
+            "message": message,
+        })
+
+    for idx, cookie_id in enumerate(cookie_ids):
+        entry = store.get_cookie(session_id, cookie_id)
+        if entry is None:
+            _add_log(cookie_id, "fail", "Cookie 不存在")
+            task.data["results"][cookie_id] = False
+            continue
+
+        entry.status = "validating"
+        shop = entry.shop_name or cookie_id
+        _add_log(cookie_id, "step", f"[{idx+1}/{len(cookie_ids)}] 开始验证: {shop}")
+
+        tmp_path = None
+        try:
+            async with browser_semaphore:
+                tmp = tempfile.NamedTemporaryFile(
+                    suffix=".json", delete=False, mode="w", encoding="utf-8"
+                )
+                json.dump(entry.storage_state, tmp)
+                tmp.close()
+                tmp_path = Path(tmp.name)
+
+                from pdd_crawler.cookie_manager import validate_cookies
+
+                async def _log_cb(level: str, msg: str) -> None:
+                    _add_log(cookie_id, level, msg)
+
+                is_valid, detail = await validate_cookies(tmp_path, log=_log_cb)
+
+            entry.status = "valid" if is_valid else "invalid"
+            task.data["results"][cookie_id] = is_valid
+        except Exception as e:
+            entry.status = "invalid"
+            task.data["results"][cookie_id] = False
+            _add_log(cookie_id, "fail", f"验证异常: {e}")
+        finally:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+    task.status = "completed"
+    task.progress = 100
 
 
 # ── QR Login via SSE ──────────────────────────────────────

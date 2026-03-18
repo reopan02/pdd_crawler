@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Callable, Awaitable
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 
@@ -95,30 +96,124 @@ async def _extract_shop_name_from_crawler(
     return await get_shop_name(crawler, session_id)
 
 
-async def validate_cookies(cookie_path: Path) -> bool:
-    """Validate storage_state by checking whether session is redirected to login."""
+# Type alias for async log callback used by validate_cookies
+LogCallback = Callable[[str, str], Awaitable[None]]
+"""Signature: async def callback(level: str, message: str) -> None
+   level is one of: 'step', 'ok', 'fail', 'info'
+"""
+
+
+async def _noop_log(_level: str, _msg: str) -> None:
+    """Default no-op log callback — just prints."""
+    pass
+
+
+async def validate_cookies(
+    cookie_path: Path,
+    log: LogCallback | None = None,
+) -> tuple[bool, str]:
+    """Validate storage_state with full SSO flow verification.
+
+    Validation steps:
+      1. Visit MMS homepage → must NOT redirect to /login
+      2. Navigate to MMS cashier proxy → triggers SSO ticket (getJumpUrl)
+      3. Verify redirect lands on cashier.pinduoduo.com (auth?ticket=...)
+      4. checkTicketV2 fires automatically → cashier session established
+
+    Args:
+        cookie_path: Path to the storage_state JSON file.
+        log: Optional async callback ``(level, message)`` for real-time
+             progress reporting.  Levels: step, ok, fail, info.
+
+    Returns:
+        (is_valid, detail_message) tuple.
+    """
+    if log is None:
+        log = _noop_log
+
     cookie_path = Path(cookie_path)
     if not cookie_path.exists():
-        print(f"[Cookie] 未找到 cookie 文件: {cookie_path}")
-        return False
+        msg = f"未找到 cookie 文件: {cookie_path}"
+        print(f"[Cookie] {msg}")
+        await log("fail", msg)
+        return False, msg
 
     session_id = "cookie_validate"
     crawler = await create_crawler(headless=True, cookie_path=cookie_path)
     try:
+        # ── Step 1: MMS 首页 — 建立 MMS 会话，检查是否被重定向到登录页 ──
+        await log("step", "Step 1/3: 访问 MMS 首页，建立会话...")
+        print("[Cookie-验证] Step 1: 访问 MMS 首页...")
         await crawler.arun(
             url=_PDD_HOME_URL,
             config=CrawlerRunConfig(session_id=session_id),
         )
         current_url = await _get_current_url(crawler, session_id)
         if _PDD_LOGIN_INDICATOR in current_url:
-            print("[Cookie] Cookie 已失效，需要重新登录")
-            return False
+            msg = "Cookie 已失效，MMS 首页重定向到登录页"
+            print(f"[Cookie-验证] ✗ {msg}")
+            await log("fail", msg)
+            return False, msg
+        await log("ok", f"MMS 首页正常 ({current_url[:60]})")
+        print(f"[Cookie-验证] ✓ Step 1 通过, MMS 首页正常: {current_url}")
 
-        print("[Cookie] Cookie 验证通过")
-        return True
+        # ── Step 2: 通过 MMS 代理页触发 SSO ticket 流程 ──
+        await log("step", "Step 2/3: 通过 MMS 代理页触发 SSO 认证 (getJumpUrl → ticket)...")
+        print("[Cookie-验证] Step 2: 通过 MMS 代理页触发 SSO 认证...")
+        page, _ctx = await crawler.crawler_strategy.browser_manager.get_page(
+            crawlerRunConfig=CrawlerRunConfig(session_id=session_id),
+        )
+        try:
+            await page.goto(
+                config.MMS_CASHIER_PROXY_URL,
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+        except Exception as e:
+            await log("info", f"导航重定向中: {e}")
+            print(f"[Cookie-验证] Step 2 导航警告 (可能是重定向): {e}")
+
+        # 等待 SSO 重定向完成
+        await log("info", "等待 SSO 重定向完成...")
+        await asyncio.sleep(5)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+
+        sso_url = page.url or ""
+        await log("info", f"当前 URL: {sso_url[:80]}")
+        print(f"[Cookie-验证] Step 2 当前 URL: {sso_url}")
+
+        # ── Step 3: 验证已到达 cashier 域名 ──
+        await log("step", "Step 3/3: 验证对账中心 (cashier) 会话...")
+        if "cashier.pinduoduo.com" not in sso_url:
+            msg = f"SSO 认证失败，未能重定向到对账中心 (停留在: {sso_url[:100]})"
+            print(f"[Cookie-验证] ✗ {msg}")
+            await log("fail", msg)
+            return False, msg
+
+        # 检查页面是否有反爬/登录异常
+        body_text = await page.evaluate("document.body.innerText || ''") or ""
+        blocked_texts = config.BLOCKED_TEXTS
+        matched = [t for t in blocked_texts if t in body_text]
+        if "login" in sso_url.lower() or (
+            matched and len(body_text.strip()) < 1000
+        ):
+            msg = f"对账中心页面异常 (检测到: {', '.join(matched) if matched else 'login redirect'})"
+            print(f"[Cookie-验证] ✗ {msg}")
+            await log("fail", msg)
+            return False, msg
+
+        msg = "Cookie 验证通过 (MMS 首页 + SSO 对账中心)"
+        print(f"[Cookie-验证] ✓ {msg}")
+        await log("ok", msg)
+        return True, msg
     except Exception as e:
-        print(f"[Cookie] 验证失败: {e}")
-        return False
+        msg = f"验证过程异常: {e}"
+        print(f"[Cookie-验证] ✗ {msg}")
+        await log("fail", msg)
+        return False, msg
     finally:
         await crawler.close()
 
@@ -227,7 +322,8 @@ async def ensure_authenticated(shop_name: str | None = None) -> tuple[Path, str]
     """Ensure valid authentication and return cookie path + shop name."""
     if shop_name is not None:
         cookie_path = config.get_cookie_path(shop_name)
-        if await validate_cookies(cookie_path):
+        is_valid, _ = await validate_cookies(cookie_path)
+        if is_valid:
             print(f"[Auth] 使用已有 cookie 认证成功 (店铺: {shop_name})")
             return cookie_path, shop_name
         print("[Auth] Cookie 已失效，切换到扫码登录")
@@ -235,7 +331,8 @@ async def ensure_authenticated(shop_name: str | None = None) -> tuple[Path, str]
     if shop_name is None:
         for candidate_path in sorted(config.COOKIES_DIR.glob("*_cookies.json")):
             print(f"[Auth] 尝试已有 cookie: {candidate_path.name}")
-            if not await validate_cookies(candidate_path):
+            is_valid, _ = await validate_cookies(candidate_path)
+            if not is_valid:
                 print(f"[Auth] Cookie 已失效: {candidate_path.name}")
                 continue
 

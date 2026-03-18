@@ -436,6 +436,85 @@
             color: var(--text-secondary);
             font-size: 15px;
         }
+
+        /* Log Panel */
+        .log-panel {
+            margin-top: 20px;
+            background: #1d1d1f;
+            border-radius: 12px;
+            padding: 16px 20px;
+            max-height: 320px;
+            overflow-y: auto;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            line-height: 1.8;
+        }
+        .log-line {
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-line[data-level="step"] { color: #64d2ff; }
+        .log-line[data-level="ok"] { color: #30d158; }
+        .log-line[data-level="fail"] { color: #ff453a; }
+        .log-line[data-level="info"] { color: #98989d; }
+
+        /* Batch Toolbar */
+        .batch-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: rgba(0, 113, 227, 0.04);
+            border: 1px solid rgba(0, 113, 227, 0.15);
+            border-radius: 10px;
+            margin-bottom: 16px;
+            animation: fadeIn 0.2s ease;
+        }
+        .batch-toolbar .batch-count {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent-blue);
+            margin-right: auto;
+        }
+
+        /* Checkbox in table */
+        th.col-check, td.col-check {
+            width: 40px;
+            text-align: center;
+        }
+        td.col-check input[type="checkbox"],
+        th.col-check input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent-blue);
+            cursor: pointer;
+        }
+
+        /* Drop Zone */
+        .drop-zone {
+            border: 2px dashed var(--border-color);
+            border-radius: 12px;
+            padding: 32px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 20px;
+        }
+        .drop-zone:hover {
+            border-color: #c5c5cb;
+            background: rgba(0,0,0,0.01);
+        }
+        .drop-zone.drag-over {
+            border-color: var(--accent-blue);
+            background: rgba(0, 113, 227, 0.04);
+            color: var(--accent-blue);
+        }
+        .drop-zone-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
@@ -469,6 +548,13 @@
             const [previewImage, setPreviewImage] = useState(null);
             const [crawlStatus, setCrawlStatus] = useState({ running: false, progress: 0, message: '', taskId: null });
             const [cleanedReport, setCleanedReport] = useState(null);
+
+            // Cookie table selection
+            const [checkedCookies, setCheckedCookies] = useState([]);
+            // Validation log panel
+            const [validateLogs, setValidateLogs] = useState([]);
+            const [validating, setValidating] = useState(false);
+            const logPanelRef = useRef(null);
 
             // Updated Form states for multi-select
             const [selectedCookies, setSelectedCookies] = useState([]);
@@ -530,24 +616,88 @@
             }, []);
 
             // --- Section 1: Cookie Actions ---
-            const handleFileUpload = async (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
+            const [dragOver, setDragOver] = useState(false);
+
+            const uploadFiles = async (fileList) => {
+                const jsonFiles = Array.from(fileList).filter(f => f.name.endsWith('.json'));
+                if (jsonFiles.length === 0) {
+                    addToast('请选择 .json 文件', 'error');
+                    return;
+                }
                 const formData = new FormData();
-                formData.append('file', file);
+                jsonFiles.forEach(f => formData.append('files', f));
                 try {
-                    await apiFetch('/api/cookies/upload', { method: 'POST', body: formData });
-                    addToast('上传成功');
+                    const data = await apiFetch('/api/cookies/upload', { method: 'POST', body: formData });
+                    const results = data.results || [];
+                    const ok = results.filter(r => r.cookie_id);
+                    const fail = results.filter(r => r.error);
+                    if (ok.length) addToast(`成功上传 ${ok.length} 个 Cookie`);
+                    if (fail.length) addToast(`${fail.length} 个文件失败: ${fail[0].error}`, 'error');
                     fetchCookies();
                 } catch (e) {}
+            };
+
+            const handleFileUpload = (e) => {
+                uploadFiles(e.target.files);
                 e.target.value = '';
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setDragOver(false);
+                uploadFiles(e.dataTransfer.files);
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setDragOver(true);
+            };
+
+            const handleDragLeave = () => setDragOver(false);
+
+            // SSE-based validation with log streaming
+            const _startValidateSSE = (taskId) => {
+                setValidateLogs([]);
+                setValidating(true);
+                const es = new EventSource(`/api/cookies/validate/${taskId}/stream?session_id=${sessionId}`);
+
+                es.addEventListener('log', (e) => {
+                    const log = JSON.parse(e.data);
+                    setValidateLogs(prev => [...prev, log]);
+                    // Auto-scroll
+                    setTimeout(() => {
+                        if (logPanelRef.current) {
+                            logPanelRef.current.scrollTop = logPanelRef.current.scrollHeight;
+                        }
+                    }, 50);
+                });
+
+                es.addEventListener('completed', (e) => {
+                    const data = JSON.parse(e.data);
+                    const results = data.results || {};
+                    const total = Object.keys(results).length;
+                    const passed = Object.values(results).filter(Boolean).length;
+                    setValidating(false);
+                    if (passed === total) {
+                        addToast(`验证完成: ${passed}/${total} 通过`);
+                    } else {
+                        addToast(`验证完成: ${passed}/${total} 通过`, 'error');
+                    }
+                    es.close();
+                    fetchCookies();
+                });
+
+                es.addEventListener('error', () => {
+                    setValidating(false);
+                    addToast('验证连接中断', 'error');
+                    es.close();
+                });
             };
 
             const handleValidate = async (id) => {
                 try {
-                    await apiFetch(`/api/cookies/${id}/validate`, { method: 'POST' });
-                    addToast('验证任务已启动');
-                    fetchCookies();
+                    const { task_id } = await apiFetch(`/api/cookies/${id}/validate`, { method: 'POST' });
+                    _startValidateSSE(task_id);
                 } catch (e) {}
             };
 
@@ -558,6 +708,7 @@
                     addToast('已删除');
                     fetchCookies();
                     setSelectedCookies(prev => prev.filter(cId => cId !== id));
+                    setCheckedCookies(prev => prev.filter(cId => cId !== id));
                 } catch (e) {}
             };
 
@@ -572,6 +723,88 @@
                     addToast('修改成功');
                     fetchCookies();
                 } catch (e) {}
+            };
+
+            const handleDownloadCookie = (id) => {
+                fetch(`/api/cookies/${id}/download`, {
+                    headers: { 'X-Session-ID': sessionId }
+                })
+                .then(res => {
+                    if (!res.ok) throw new Error('下载失败');
+                    const disposition = res.headers.get('Content-Disposition') || '';
+                    const match = disposition.match(/filename\*?=(?:UTF-8'')?(.+)/i);
+                    const filename = match ? decodeURIComponent(match[1]) : `cookie_${id}.json`;
+                    return res.blob().then(blob => ({ blob, filename }));
+                })
+                .then(({ blob, filename }) => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                })
+                .catch(err => addToast(err.message, 'error'));
+            };
+
+            // --- Cookie table checkbox ---
+            const toggleCheck = (cookieId) => {
+                setCheckedCookies(prev =>
+                    prev.includes(cookieId) ? prev.filter(id => id !== cookieId) : [...prev, cookieId]
+                );
+            };
+            const toggleCheckAll = () => {
+                if (checkedCookies.length === cookies.length && cookies.length > 0) {
+                    setCheckedCookies([]);
+                } else {
+                    setCheckedCookies(cookies.map(c => c.cookie_id));
+                }
+            };
+
+            // --- Batch actions ---
+            const handleBatchValidate = async () => {
+                if (checkedCookies.length === 0) return;
+                try {
+                    const { task_id } = await apiFetch('/api/cookies/batch/validate', {
+                        method: 'POST', body: { cookie_ids: checkedCookies }
+                    });
+                    _startValidateSSE(task_id);
+                } catch (e) {}
+            };
+
+            const handleBatchDelete = async () => {
+                if (checkedCookies.length === 0) return;
+                if (!confirm(`确定删除选中的 ${checkedCookies.length} 个 Cookie 吗？`)) return;
+                try {
+                    await apiFetch('/api/cookies/batch/delete', {
+                        method: 'POST', body: { cookie_ids: checkedCookies }
+                    });
+                    addToast(`已删除 ${checkedCookies.length} 个 Cookie`);
+                    setCheckedCookies([]);
+                    setSelectedCookies(prev => prev.filter(id => !checkedCookies.includes(id)));
+                    fetchCookies();
+                } catch (e) {}
+            };
+
+            const handleBatchDownload = async () => {
+                if (checkedCookies.length === 0) return;
+                try {
+                    const res = await fetch('/api/cookies/batch/download', {
+                        method: 'POST',
+                        headers: { 'X-Session-ID': sessionId, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ cookie_ids: checkedCookies }),
+                    });
+                    if (!res.ok) throw new Error('下载失败');
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'cookies_batch.zip';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                } catch (err) {
+                    addToast(err.message, 'error');
+                }
             };
 
             const startQrLogin = async () => {
@@ -713,22 +946,6 @@
                 } catch (e) {}
             };
 
-            const handleManualClean = async (e) => {
-                const files = e.target.files;
-                if (!files.length) return;
-                
-                const formData = new FormData();
-                for (let i = 0; i < files.length; i++) {
-                    formData.append('files', files[i]);
-                }
-
-                try {
-                    const data = await apiFetch('/api/clean', { method: 'POST', body: formData });
-                    setCleanedReport(data);
-                    addToast('清洗成功');
-                } catch (e) {}
-                e.target.value = '';
-            };
 
             const downloadReport = () => {
                 if (!cleanedReport) return;
@@ -763,22 +980,50 @@
                     <section id="cookies">
                         <div className="section-title">
                             <span>1. Cookie 账号管理</span>
-                            <div className="flex gap-12">
-                                <input 
-                                    type="file" 
-                                    id="cookieUpload" 
-                                    style={{display: 'none'}} 
-                                    onChange={handleFileUpload} 
-                                    accept=".json"
-                                />
-                                <button className="btn btn-sm" onClick={() => document.getElementById('cookieUpload').click()}>上传 JSON</button>
-                                <button className="btn btn-primary btn-sm" onClick={startQrLogin}>+ 扫码登录</button>
-                            </div>
+                            <button className="btn btn-primary btn-sm" onClick={startQrLogin}>+ 扫码登录</button>
                         </div>
                         <div className="card">
+                            {/* Drop zone for batch upload */}
+                            <div
+                                className={`drop-zone ${dragOver ? 'drag-over' : ''}`}
+                                onDrop={handleDrop}
+                                onDragOver={handleDragOver}
+                                onDragLeave={handleDragLeave}
+                                onClick={() => document.getElementById('cookieUpload').click()}
+                            >
+                                <div className="drop-zone-icon">📂</div>
+                                <div>拖拽 JSON 文件到此处，或点击选择文件</div>
+                                <div style={{fontSize: '12px', marginTop: '4px', color: 'var(--text-secondary)'}}>支持批量上传多个 storage_state 文件</div>
+                            </div>
+                            <input
+                                type="file"
+                                id="cookieUpload"
+                                style={{display: 'none'}}
+                                onChange={handleFileUpload}
+                                accept=".json"
+                                multiple
+                            />
+                            {/* Batch toolbar — visible when any cookie is checked */}
+                            {checkedCookies.length > 0 && (
+                                <div className="batch-toolbar">
+                                    <span className="batch-count">已选 {checkedCookies.length} 项</span>
+                                    <button className="btn btn-sm btn-primary" onClick={handleBatchValidate} disabled={validating}>
+                                        {validating ? '验证中...' : '批量验证'}
+                                    </button>
+                                    <button className="btn btn-sm" onClick={handleBatchDownload}>批量下载</button>
+                                    <button className="btn btn-sm btn-danger" onClick={handleBatchDelete}>批量删除</button>
+                                </div>
+                            )}
                             <table>
                                 <thead>
                                     <tr>
+                                        <th className="col-check">
+                                            <input
+                                                type="checkbox"
+                                                checked={cookies.length > 0 && checkedCookies.length === cookies.length}
+                                                onChange={toggleCheckAll}
+                                            />
+                                        </th>
                                         <th>店铺名称</th>
                                         <th>状态</th>
                                         <th>Cookie 数量</th>
@@ -787,9 +1032,16 @@
                                 </thead>
                                 <tbody>
                                     {cookies.length === 0 ? (
-                                        <tr><td colSpan="4" className="empty-state">暂无数据，请扫码登录或上传 Cookie</td></tr>
+                                        <tr><td colSpan="5" className="empty-state">暂无数据，请扫码登录或上传 Cookie</td></tr>
                                     ) : cookies.map(c => (
                                         <tr key={c.cookie_id}>
+                                            <td className="col-check">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checkedCookies.includes(c.cookie_id)}
+                                                    onChange={() => toggleCheck(c.cookie_id)}
+                                                />
+                                            </td>
                                             <td className="mono" style={{fontWeight: 500}}>
                                                 <span 
                                                     style={{cursor: 'pointer', padding: '4px 0', borderBottom: '1px dashed var(--border-color)'}}
@@ -807,7 +1059,8 @@
                                             <td className="mono text-secondary">{c.cookie_count}</td>
                                             <td className="text-right">
                                                 <div className="flex gap-12 justify-end">
-                                                    <button className="btn btn-sm" onClick={() => handleValidate(c.cookie_id)}>验证</button>
+                                                    <button className="btn btn-sm" onClick={() => handleValidate(c.cookie_id)} disabled={validating}>验证</button>
+                                                    <button className="btn btn-sm" onClick={() => handleDownloadCookie(c.cookie_id)}>下载</button>
                                                     <button className="btn btn-sm btn-danger" onClick={() => handleDelete(c.cookie_id)}>删除</button>
                                                 </div>
                                             </td>
@@ -815,6 +1068,23 @@
                                     ))}
                                 </tbody>
                             </table>
+
+                            {/* Validation log panel */}
+                            {validateLogs.length > 0 && (
+                                <div className="log-panel" ref={logPanelRef}>
+                                    {validateLogs.map((log, i) => {
+                                        const prefix = log.level === 'ok' ? '✓' : log.level === 'fail' ? '✗' : log.level === 'step' ? '▸' : ' ';
+                                        return (
+                                            <div key={i} className="log-line" data-level={log.level}>
+                                                {prefix} {log.message}
+                                            </div>
+                                        );
+                                    })}
+                                    {validating && (
+                                        <div className="log-line" data-level="info" style={{opacity: 0.6}}>⏳ 验证进行中...</div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </section>
 
@@ -901,18 +1171,6 @@
                     <section id="clean">
                         <div className="section-title">3. 数据清洗与处理</div>
                         <div className="card">
-                            <div className="flex gap-12">
-                                <button className="btn" onClick={cleanFromTask}>从最新采集结果清洗</button>
-                                <input 
-                                    type="file" 
-                                    id="manualClean" 
-                                    multiple 
-                                    style={{display: 'none'}} 
-                                    onChange={handleManualClean}
-                                />
-                                <button className="btn" onClick={() => document.getElementById('manualClean').click()}>手动上传清洗</button>
-                            </div>
-
                             {cleanedReport && (
                                 <div className="mt-24">
                                     <div className="flex justify-between items-center mb-16">
