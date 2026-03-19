@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PDD Crawler — 后台启动脚本 (WSL / Linux)
 # 用法:
-#   ./start.sh          启动服务 (默认 0.0.0.0:8000)
+#   ./start.sh          启动服务 (默认 0.0.0.0:6066)
 #   ./start.sh stop     停止服务
 #   ./start.sh restart  重启服务
 #   ./start.sh status   查看状态
@@ -16,7 +16,7 @@ STDOUT_LOG="$LOG_DIR/web_stdout.log"
 STDERR_LOG="$LOG_DIR/web_stderr.log"
 
 HOST="${PDD_HOST:-0.0.0.0}"
-PORT="${PDD_PORT:-8000}"
+PORT="${PDD_PORT:-6066}"
 
 # 优先使用 venv 中的 python
 if [ -f "$ROOT_DIR/venv/bin/python" ]; then
