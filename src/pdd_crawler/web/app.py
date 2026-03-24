@@ -22,8 +22,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — startup/shutdown hooks."""
+    from pdd_crawler.web import db
+
+    db.init_db()
     print("[Web] PDD Crawler Web 启动")
     yield
+    db.close_db()
     print("[Web] PDD Crawler Web 关闭")
 
 

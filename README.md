@@ -4,7 +4,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688)](https://fastapi.tiangolo.com/)
 [![版本](https://img.shields.io/badge/版本-0.2.0-green)](https://github.com/reopan02/pdd_crawler)
 
-基于 Web 界面的拼多多商家后台数据采集工具。所有数据仅在内存中运行，不写入本地文件，支持局域网多用户访问。
+基于 Web 界面的拼多多商家后台数据采集工具。采集数据持久化存储至 PostgreSQL，支持局域网多用户访问。
 
 ## 功能
 
@@ -21,6 +21,7 @@
 | 前端 | React SPA (内嵌 static/index.html) |
 | 爬虫 | crawl4ai + Playwright (Chromium) |
 | 通信 | REST API + SSE (Server-Sent Events) |
+| 数据库 | PostgreSQL (psycopg2-binary) |
 
 ## 快速开始
 
@@ -30,6 +31,33 @@
 pip install -e .
 playwright install chromium
 ```
+
+### PostgreSQL 配置
+
+启动前需要一个可访问的 PostgreSQL 实例，并通过环境变量指定连接信息：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `PG_DSN` | 完整 DSN（优先级最高） | — |
+| `PG_HOST` | 数据库主机 | `localhost` |
+| `PG_PORT` | 端口 | `5432` |
+| `PG_USER` | 用户名 | `postgres` |
+| `PG_PASSWORD` | 密码 | `""` |
+| `PG_DATABASE` | 数据库名 | `pdd_crawler` |
+
+```bash
+# 示例：使用完整 DSN
+export PG_DSN="postgresql://myuser:mypass@localhost:5432/pdd_crawler"
+
+# 或逐项配置
+export PG_HOST=localhost
+export PG_PORT=5432
+export PG_USER=postgres
+export PG_PASSWORD=secret
+export PG_DATABASE=pdd_crawler
+```
+
+数据库和表结构会在首次启动时自动创建（`shop_daily_reports` 表）。
 
 ### 启动
 
