@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 
 from pdd_crawler.web.deps import get_session_id
 from pdd_crawler.web.session_store import store
-from pdd_crawler.web import data_store
+
 
 router = APIRouter(tags=["clean"])
 
@@ -363,6 +363,7 @@ async def clean_from_task(request: Request, task_id: str):
 
 def _auto_import_reports(reports: list[dict]) -> int:
     """Auto-import cleaned reports into the persistent data store."""
+    from pdd_crawler.web import data_store
     count = 0
     for report in reports:
         if report.get("数据日期") and report.get("店铺名称"):
