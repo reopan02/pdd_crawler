@@ -130,6 +130,11 @@ qrcode.png
 .idea/
 .sisyphus/
 
+# PostgreSQL / environment
+.env
+*.env
+pgpass
+
 # Runtime artifacts
 logs/
 output/*.json

@@ -15,7 +15,6 @@ PG_DSN takes priority over individual vars.
 from __future__ import annotations
 
 import os
-from typing import Generator
 
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -32,6 +31,35 @@ def _build_dsn() -> str:
     password = os.environ.get("PG_PASSWORD", "")
     database = os.environ.get("PG_DATABASE", "pdd_crawler")
     return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
+
+def _build_conn_kwargs() -> dict:
+    """Return psycopg2.connect() keyword arguments.
+
+    Using kwargs instead of a DSN string prevents libpq from reading
+    locale-sensitive config files (pgpass, pg_service.conf) that may be
+    GBK-encoded on Chinese Windows systems.
+    """
+    dsn = os.environ.get("PG_DSN")
+    if dsn:
+        # Parse the DSN manually to extract components
+        from urllib.parse import urlparse, unquote
+
+        parsed = urlparse(dsn)
+        return {
+            "host": parsed.hostname or "localhost",
+            "port": int(parsed.port or 5432),
+            "user": unquote(parsed.username or "postgres"),
+            "password": unquote(parsed.password or ""),
+            "dbname": (parsed.path or "/pdd_crawler").lstrip("/"),
+        }
+    return {
+        "host": os.environ.get("PG_HOST", "localhost"),
+        "port": int(os.environ.get("PG_PORT", "5432")),
+        "user": os.environ.get("PG_USER", "postgres"),
+        "password": os.environ.get("PG_PASSWORD", ""),
+        "dbname": os.environ.get("PG_DATABASE", "pdd_crawler"),
+    }
 
 
 _pool: pg_pool.ThreadedConnectionPool | None = None
@@ -87,17 +115,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_shop_date
 def init_db() -> None:
     """Initialise connection pool and ensure schema exists."""
     global _pool
-    dsn = _build_dsn()
-    # On Windows, psycopg2 reads pgpass.conf which may be GBK-encoded,
-    # causing UnicodeDecodeError. Always redirect to NUL (Windows /dev/null)
-    # since the DSN already contains credentials.
-    if os.name == "nt":
-        os.environ["PGPASSFILE"] = "NUL"
-    _pool = pg_pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=dsn)
+    conn_kwargs = _build_conn_kwargs()
+    _pool = pg_pool.ThreadedConnectionPool(minconn=1, maxconn=10, **conn_kwargs)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(_DDL)
-    print(f"[DB] Connected to PostgreSQL — pool ready (dsn={dsn.split('@')[-1]})")
+    host = conn_kwargs.get("host", "")
+    dbname = conn_kwargs.get("dbname", "")
+    print(f"[DB] Connected to PostgreSQL — pool ready ({host}/{dbname})")
 
 
 def close_db() -> None:
