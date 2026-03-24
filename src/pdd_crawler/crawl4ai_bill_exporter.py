@@ -196,9 +196,7 @@ async def _read_picker_date(page: Page) -> str:
     Returns the raw value like '2026-03-14 00:00:00 ~ 2026-03-14 23:59:59',
     or '' if not found.
     """
-    for selector in (
-        '[data-testid="beast-core-rangePicker-htmlInput"]',
-    ):
+    for selector in ('[data-testid="beast-core-rangePicker-htmlInput"]',):
         loc = page.locator(selector)
         if await loc.count() > 0:
             val = await loc.first.input_value()
@@ -336,9 +334,7 @@ async def _select_yesterday_date(
             await _human_delay(0.3, 0.6)
 
             yesterday_str = pdd_yesterday.isoformat()  # e.g. "2026-03-15"
-            target_value = (
-                f"{yesterday_str} 00:00:00 ~ {yesterday_str} 23:59:59"
-            )
+            target_value = f"{yesterday_str} 00:00:00 ~ {yesterday_str} 23:59:59"
 
             # Find the date input element
             input_sel = '[data-testid="beast-core-rangePicker-htmlInput"]'
@@ -358,7 +354,8 @@ async def _select_yesterday_date(
             # React overrides the native value setter, so we must use the
             # native HTMLInputElement.prototype setter to bypass it, then
             # dispatch 'input' and 'change' events.
-            js_set_date = """
+            js_set_date = (
+                """
                 (el) => {
                     const nativeSetter = Object.getOwnPropertyDescriptor(
                         window.HTMLInputElement.prototype, 'value'
@@ -367,13 +364,13 @@ async def _select_yesterday_date(
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                 }
-            """ % target_value
+            """
+                % target_value
+            )
 
             await input_loc.first.evaluate(js_set_date)
             await _human_delay(0.5, 1.0)
-            print(
-                f"[账单-日期] 已通过JS设置日期输入值: {target_value}"
-            )
+            print(f"[账单-日期] 已通过JS设置日期输入值: {target_value}")
 
         # 3) Click "查询" to apply the date filter
         query_btn = page.locator("button:has-text('查询')")
@@ -646,10 +643,9 @@ async def export_single_bill(
     resolved_today: date | None = None
     if selected_date:
         try:
-            resolved_today = (
-                datetime.strptime(selected_date, "%Y-%m-%d").date()
-                + timedelta(days=1)
-            )
+            resolved_today = datetime.strptime(
+                selected_date, "%Y-%m-%d"
+            ).date() + timedelta(days=1)
         except ValueError:
             pass
     if not selected_date:
@@ -662,10 +658,17 @@ async def export_single_bill(
         '[class*="export"] button',
     ]
 
-    # Use Playwright's wait_for_event to capture new page (tab)
-    # Start waiting for the 'page' event BEFORE clicking the button
+    # Try to capture a new tab opened by the export button.
+    # Some PDD cashier builds open a new tab; others navigate in-place or do nothing.
+    # Strategy:
+    #   1. Start expect_page listener BEFORE clicking.
+    #   2. If a new tab appears within 10 s → use it.
+    #   3. If no new tab → fall back to direct navigation of export-history URL
+    #      in the current page (same behaviour as the existing URL-mismatch fallback).
+    new_page = None
+
     try:
-        async with context.expect_page(timeout=15000) as page_info:
+        async with context.expect_page(timeout=10000) as page_info:
             clicked = await _pw_click(page, export_selectors, ["导出账单", "导出"])
             if not clicked:
                 print("[账单] 未找到导出按钮")
@@ -676,21 +679,41 @@ async def export_single_bill(
         print(f"[账单] 新标签页已打开: {new_page.url}")
 
     except Exception as e:
-        print(f"[账单] 等待新标签页失败: {e}")
-        return None, resolved_today
+        print(f"[账单] 未检测到新标签页 ({e})，降级为当前页面导航")
+        # Click the button again best-effort (may already be clicked above)
+        await _pw_click(page, export_selectors, ["导出账单", "导出"])
+        await _human_delay(1.5, 2.5)
+        # Resolve export-history URL for this tab
+        _export_history_url = config.BILL_EXPORT_HISTORY_MAP.get(tab_url)
+        if not _export_history_url:
+            _tab_part = (
+                tab_url.split("tab=")[1].split("&")[0] if "tab=" in tab_url else "4001"
+            )
+            _export_history_url = (
+                "https://cashier.pinduoduo.com/main/bills/export-history"
+                f"?tab={_tab_part}&__app_code=113"
+            )
+        try:
+            await page.goto(
+                _export_history_url, wait_until="domcontentloaded", timeout=30000
+            )
+            await _human_delay(1.0, 2.0)
+        except Exception as nav_err:
+            print(f"[账单] 导航到导出历史页失败: {nav_err}")
+            return None, resolved_today
+        new_page = page  # reuse current page
 
-    # Wait for the new page to load
+    # Wait for the page to load
     try:
         await new_page.wait_for_load_state("domcontentloaded", timeout=15000)
     except Exception:
         pass
     await _human_delay(1.0, 2.0)
 
-    # Verify we're on the export history page
+    # Verify we're on the export history page; navigate there if not
     current_url = new_page.url or ""
     if "export-history" not in current_url:
-        print(f"[账单] 新页面不是导出历史页: {current_url}")
-        # If not on export history, try navigating directly
+        print(f"[账单] 当前页面不是导出历史页: {current_url}，直接导航")
         export_history_url = config.BILL_EXPORT_HISTORY_MAP.get(tab_url)
         if not export_history_url:
             tab_part = (
@@ -704,6 +727,7 @@ async def export_single_bill(
             await new_page.goto(
                 export_history_url, wait_until="domcontentloaded", timeout=30000
             )
+            await _human_delay(1.0, 2.0)
         except Exception as e:
             print(f"[账单] 导航到导出历史页失败: {e}")
             return None, resolved_today
