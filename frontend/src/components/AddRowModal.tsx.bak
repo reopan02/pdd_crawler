@@ -1,0 +1,197 @@
+import React, { useState } from 'react'
+import Modal from './Modal'
+import { toast } from '@/store/toast'
+import { createDataRow } from '@/api/data'
+import { Save, AlertCircle } from 'lucide-react'
+
+interface AddRowModalProps {
+  open: boolean
+  onClose: () => void
+  onSuccess: () => void
+  shopList: string[]
+}
+
+const AddRowModal: React.FC<AddRowModalProps> = ({ open, onClose, onSuccess, shopList }) => {
+  const [loading, setLoading] = useState(false)
+  const [formData, setFormData] = useState({
+    shop_name: shopList[0] || '',
+    data_date: new Date().toISOString().split('T')[0],
+    payment_amount: 0,
+    promotion_cost: 0,
+    marketing_cost: 0,
+    after_sale_cost: 0,
+    tech_service_fee: 0,
+    other_cost: 0,
+    platform_refund: 0,
+  })
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!formData.shop_name) return toast.error('请选择店铺')
+    
+    setLoading(true)
+    try {
+      await createDataRow(formData)
+      toast.success('新增成功')
+      onSuccess()
+      onClose()
+    } catch (err: any) {
+      toast.error(err.message || '新增失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, type } = e.target
+    setFormData(prev => ({
+      ...prev,
+      [name]: type === 'number' ? parseFloat(value) || 0 : value
+    }))
+  }
+
+  return (
+    <Modal 
+      open={open} 
+      onClose={onClose} 
+      title="手动录入日报数据"
+      maxWidth="max-w-xl"
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg font-medium transition-all shadow-lg shadow-indigo-500/20"
+          >
+            {loading ? <Save className="w-4 h-4 animate-pulse" /> : <Save className="w-4 h-4" />}
+            保存数据
+          </button>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">店铺名称</label>
+          <select
+            name="shop_name"
+            value={formData.shop_name}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors"
+          >
+            <option value="" disabled>选择店铺</option>
+            {shopList.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">数据日期</label>
+          <input
+            type="date"
+            name="data_date"
+            value={formData.data_date}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+
+        <div className="col-span-2 border-t border-[#252840]/30 my-2 pt-4">
+          <h3 className="text-sm font-semibold text-indigo-400 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" /> 数值指标
+          </h3>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">支付金额 (元)</label>
+          <input
+            type="number"
+            step="0.01"
+            name="payment_amount"
+            value={formData.payment_amount}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">推广消耗 (元)</label>
+          <input
+            type="number"
+            step="0.01"
+            name="promotion_cost"
+            value={formData.promotion_cost}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">营销反现 (元)</label>
+          <input
+            type="number"
+            step="0.01"
+            name="marketing_cost"
+            value={formData.marketing_cost}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">售后成本 (元)</label>
+          <input
+            type="number"
+            step="0.01"
+            name="after_sale_cost"
+            value={formData.after_sale_cost}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">技术服务费 (元)</label>
+          <input
+            type="number"
+            step="0.01"
+            name="tech_service_fee"
+            value={formData.tech_service_fee}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">其他支出 (元)</label>
+          <input
+            type="number"
+            step="0.01"
+            name="other_cost"
+            value={formData.other_cost}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">平台退款 (元)</label>
+          <input
+            type="number"
+            step="0.01"
+            name="platform_refund"
+            value={formData.platform_refund}
+            onChange={handleChange}
+            className="w-full bg-[#1a1d27] border border-[#252840] rounded-lg px-4 py-2 text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+export default AddRowModal
