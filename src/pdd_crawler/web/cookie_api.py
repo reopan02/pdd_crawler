@@ -278,11 +278,32 @@ async def _qr_login_background(session_id: str, task_id: str) -> None:
                 poll_interval = 3
 
                 while elapsed < timeout:
-                    # Take screenshot of the page (or QR element)
+                    # Take screenshot of the QR code canvas element only
                     try:
-                        screenshot_bytes = await page.screenshot(type="png")
-                        qr_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
-                        task.data["qr_image"] = qr_b64
+                        qr_selector = (
+                            "#root > div.pdd-app-skeleton > div > div > main > div "
+                            "> section.login-content > div > div > div > section "
+                            "> div > div.scan-login.qr-code-activity > div.qr-code > canvas"
+                        )
+                        canvas = await page.query_selector(qr_selector)
+                        if canvas:
+                            # Playwright native element screenshot (PNG bytes)
+                            screenshot_bytes = await canvas.screenshot(type="png")
+                            qr_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+                        else:
+                            # Canvas not found yet — fall back to toDataURL() via JS
+                            data_url: str = await page.evaluate(
+                                f"""() => {{
+                                    const c = document.querySelector({repr(qr_selector)});
+                                    return c ? c.toDataURL('image/png') : '';
+                                }}"""
+                            )
+                            if data_url.startswith("data:image/png;base64,"):
+                                qr_b64 = data_url.split(",", 1)[1]
+                            else:
+                                qr_b64 = None
+                        if qr_b64:
+                            task.data["qr_image"] = qr_b64
                     except Exception:
                         pass
 
@@ -299,7 +320,10 @@ async def _qr_login_background(session_id: str, task_id: str) -> None:
                         shop_name = await get_shop_name(crawler, crawl_session_id)
 
                         # Extract storage_state
-                        _, ctx = await crawler.crawler_strategy.browser_manager.get_page(  # type: ignore[union-attr]
+                        (
+                            _,
+                            ctx,
+                        ) = await crawler.crawler_strategy.browser_manager.get_page(  # type: ignore[union-attr]
                             crawlerRunConfig=CrawlerRunConfig(
                                 session_id=crawl_session_id
                             ),
