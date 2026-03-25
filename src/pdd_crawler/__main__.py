@@ -6,6 +6,29 @@ Usage:
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Force-redirect all libpq config file lookups BEFORE any imports.
+# On Chinese Windows, libpq reads GBK-encoded files (pgpass.conf,
+# pg_service.conf) and psycopg2 crashes decoding them as UTF-8.
+# Setting these to non-existent paths makes libpq skip the reads entirely.
+if os.name == "nt":
+    _nul = "NUL"
+    _nodir = "C:\\nonexistent_pdd_pg_conf"
+    os.environ["PGPASSFILE"] = _nul
+    os.environ["PGSERVICEFILE"] = _nul
+    os.environ["PGSYSCONFDIR"] = _nodir
+    os.environ["PGAPPNAME"] = "pdd_crawler"
+
+# Load .env from project root before anything else
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 import argparse
 
 import uvicorn

@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import json
 
+import asyncpg
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
@@ -20,19 +21,21 @@ router = APIRouter(prefix="/data", tags=["data"])
 
 # ── Meta endpoints ────────────────────────────────────────
 
+
 @router.get("/shops")
 async def get_shops():
     """Return all distinct shop names."""
-    return {"shops": _ds.store.get_shops()}
+    return {"shops": await _ds.store.get_shops()}
 
 
 @router.get("/months")
 async def get_months():
     """Return all distinct YYYY-MM months, newest first."""
-    return {"months": _ds.store.get_months()}
+    return {"months": await _ds.store.get_months()}
 
 
 # ── Query endpoint ────────────────────────────────────────
+
 
 @router.get("/query")
 async def query_data(request: Request):
@@ -46,19 +49,23 @@ async def query_data(request: Request):
     shops_param = params.get("shops", "")
     shops = [s for s in shops_param.split(",") if s] if shops_param else None
     month = params.get("month", "") or None
-    rows = _ds.store.query(shops, month)
+    rows = await _ds.store.query(shops, month)
     return {"rows": rows, "count": len(rows)}
 
 
 # ── CRUD endpoints ────────────────────────────────────────
 
+
 @router.post("/rows")
 async def add_row(request: Request):
-    """Add a new data row."""
+    """Add a new data row (upsert on shop_name + data_date conflict)."""
     body = await request.json()
     if not body.get("shop_name") or not body.get("data_date"):
         raise HTTPException(status_code=422, detail="shop_name 和 data_date 为必填项")
-    row = _ds.store.add_row(body)
+    try:
+        row = await _ds.store.add_row(body)
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail="该店铺该日期的数据已存在")
     return {"success": True, "row": row}
 
 
@@ -66,7 +73,7 @@ async def add_row(request: Request):
 async def update_row(row_id: str, request: Request):
     """Update numeric fields of an existing row."""
     body = await request.json()
-    row = _ds.store.update_row(row_id, body)
+    row = await _ds.store.update_row(row_id, body)
     if row is None:
         raise HTTPException(status_code=404, detail="数据行不存在")
     return {"success": True, "row": row}
@@ -75,13 +82,14 @@ async def update_row(row_id: str, request: Request):
 @router.delete("/rows/{row_id}")
 async def delete_row(row_id: str):
     """Delete a data row by id."""
-    ok = _ds.store.delete_row(row_id)
+    ok = await _ds.store.delete_row(row_id)
     if not ok:
         raise HTTPException(status_code=404, detail="数据行不存在")
     return {"success": True}
 
 
 # ── Upload endpoint ───────────────────────────────────────
+
 
 @router.post("/upload")
 async def upload_data(files: list[UploadFile] = File(...)):
@@ -96,7 +104,7 @@ async def upload_data(files: list[UploadFile] = File(...)):
                 text = content.decode("gb18030")
             except Exception:
                 continue
-        total += _ds.store.import_from_json_file(text)
+        total += await _ds.store.import_from_json_file(text)
     return {"success": True, "count": total}
 
 
@@ -112,6 +120,12 @@ _COLUMNS = [
     ("tech_service_fee", "技术服务费"),
     ("other_cost", "其他费用"),
     ("platform_refund", "平台返还"),
+    ("sales_amount", "销售金额"),
+    ("refund_amount", "退货金额"),
+    ("sales_cost", "销售成本"),
+    ("refund_cost", "退货成本"),
+    ("sales_order_count", "销售单数"),
+    ("freight_expense", "运费支出"),
 ]
 
 
@@ -123,7 +137,7 @@ async def export_xlsx(request: Request):
     shops = [s for s in shops_param.split(",") if s] if shops_param else None
     month = params.get("month", "") or None
 
-    rows = _ds.store.query(shops, month)
+    rows = await _ds.store.query(shops, month)
 
     wb = Workbook()
     ws = wb.active
@@ -135,8 +149,12 @@ async def export_xlsx(request: Request):
 
     # Group header row
     group_headers = [
-        ("", 1), ("", 1), ("店铺基础数据", 1), ("付费推广数据", 1),
+        ("", 1),
+        ("", 1),
+        ("店铺基础数据", 1),
+        ("付费推广数据", 1),
         ("营业费用", 5),
+        ("聚水潭数据", 6),
     ]
     col = 1
     for label, span in group_headers:

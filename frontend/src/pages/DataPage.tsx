@@ -180,6 +180,14 @@ export default function DataPage() {
     runJstUploadAndPreview(file, jstBizDate)
   }
 
+  const handleJstBizDateChange = (newDate: string) => {
+    setJstBizDate(newDate)
+    setJstCommitResult(null)
+    if (jstFile && !jstProcessing) {
+      runJstUploadAndPreview(jstFile, newDate)
+    }
+  }
+
   const handleJstCommit = async () => {
     if (!jstPreviewResult) return
     setJstCommitting(true)
@@ -277,7 +285,7 @@ export default function DataPage() {
           <div className="flex gap-8 items-center">
             <label style={{ fontSize: 12, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>业务日期</label>
             <input type="date" className="form-input" style={{ width: 150, padding: '5px 10px', fontSize: 13 }}
-              value={jstBizDate} onChange={e => setJstBizDate(e.target.value)} />
+              value={jstBizDate} onChange={e => handleJstBizDateChange(e.target.value)} />
           </div>
           <button className="btn btn-sm btn-success"
             disabled={!jstPreviewResult || jstCommitting || !!jstCommitResult}

@@ -356,18 +356,18 @@ async def clean_from_task(request: Request, task_id: str):
         reports.append(process_shop_data(home_data, bill_csv, marketing_csv))
 
     # Auto-import cleaned data into persistent store
-    _auto_import_reports(reports)
+    await _auto_import_reports(reports)
 
     return {"report": reports, "reports": reports, "count": len(reports)}
 
 
-def _auto_import_reports(reports: list[dict]) -> int:
+async def _auto_import_reports(reports: list[dict]) -> int:
     """Auto-import cleaned reports into the persistent data store."""
     from pdd_crawler.web import data_store
     count = 0
     for report in reports:
         if report.get("数据日期") and report.get("店铺名称"):
-            data_store.import_json_data(report)
+            await data_store.import_json_data(report)
             count += 1
     return count
 
