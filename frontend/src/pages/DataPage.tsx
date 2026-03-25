@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   fetchShops, queryDataRows, uploadDataFiles,
-  updateDataRow, deleteDataRow, createDataRow, exportXlsx
+  updateDataRow, deleteDataRow, createDataRow, exportXlsx,
+  jstUpload, jstPreview, jstCommit
 } from '@/api/data'
 import { toast } from '@/store/toast'
-import type { DataRow } from '@/types'
+import type { DataRow, JstPreviewResult, JstCommitResult } from '@/types'
 import Modal from '@/components/Modal'
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
@@ -23,12 +24,34 @@ const NUM_COLS = [
   { key: 'tech_service_fee', label: '技术服务费', group: '营业费用' },
   { key: 'other_cost', label: '其他费用', group: '营业费用' },
   { key: 'platform_refund', label: '平台返还', group: '营业费用' },
+  { key: 'sales_amount', label: '销售金额', group: '聚水潭数据' },
+  { key: 'refund_amount', label: '退货金额', group: '聚水潭数据' },
+  { key: 'sales_cost', label: '销售成本', group: '聚水潭数据' },
+  { key: 'refund_cost', label: '退货成本', group: '聚水潭数据' },
+  { key: 'sales_order_count', label: '销售单数', group: '聚水潭数据' },
+  { key: 'freight_expense', label: '运费支出', group: '聚水潭数据' },
 ] as const
 
 const EMPTY_FORM: Omit<DataRow, 'id'> = {
   shop_name: '', data_date: '',
   payment_amount: 0, promotion_cost: 0, marketing_cost: 0,
   after_sale_cost: 0, tech_service_fee: 0, other_cost: 0, platform_refund: 0,
+  sales_amount: 0, refund_amount: 0, sales_cost: 0, refund_cost: 0,
+  sales_order_count: 0, freight_expense: 0,
+}
+
+function StatBadge({ label, value, color }: { label: string; value: number; color?: string }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      padding: '4px 12px', borderRadius: 8,
+      background: 'var(--surface-2)', border: '1px solid var(--border)',
+      fontSize: 12, fontFamily: 'var(--font-mono)',
+    }}>
+      <span style={{ color: 'var(--text-2)' }}>{label}</span>
+      <span style={{ fontWeight: 700, color: color ?? 'var(--text)', fontSize: 14 }}>{value}</span>
+    </div>
+  )
 }
 
 export default function DataPage() {
@@ -43,6 +66,16 @@ export default function DataPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState<Omit<DataRow, 'id'>>({ ...EMPTY_FORM })
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // JST import state
+  const [jstFile, setJstFile] = useState<File | null>(null)
+  const [jstProcessing, setJstProcessing] = useState(false)
+  const [jstPreviewResult, setJstPreviewResult] = useState<JstPreviewResult | null>(null)
+  const [jstCommitting, setJstCommitting] = useState(false)
+  const [jstCommitResult, setJstCommitResult] = useState<JstCommitResult | null>(null)
+  const [jstBizDate, setJstBizDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [jstDragover, setJstDragover] = useState(false)
+  const jstFileRef = useRef<HTMLInputElement>(null)
 
   const loadMeta = async () => {
     try {
@@ -123,6 +156,50 @@ export default function DataPage() {
     catch { toast.error('导出失败') }
   }
 
+  // ── JST: auto upload + preview on file select ────────
+
+  const runJstUploadAndPreview = async (file: File, bizDate: string) => {
+    setJstProcessing(true)
+    setJstPreviewResult(null)
+    setJstCommitResult(null)
+    try {
+      const uploadRes = await jstUpload(file)
+      const previewRes = await jstPreview(uploadRes.upload_token, bizDate)
+      setJstPreviewResult(previewRes)
+      toast.success('解析匹配完成')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '上传解析失败')
+    } finally {
+      setJstProcessing(false)
+    }
+  }
+
+  const handleJstFile = (file: File) => {
+    if (!file.name.endsWith('.xlsx')) { toast.error('仅支持 .xlsx 文件'); return }
+    setJstFile(file)
+    runJstUploadAndPreview(file, jstBizDate)
+  }
+
+  const handleJstCommit = async () => {
+    if (!jstPreviewResult) return
+    setJstCommitting(true)
+    try {
+      const res = await jstCommit(jstPreviewResult.upload_token, jstPreviewResult.preview_id)
+      setJstCommitResult(res)
+      if (res.status === 'already_committed') {
+        toast.info('该批次已提交过，未重复写入')
+      } else {
+        toast.success(`写入完成: 插入 ${res.inserted_count} 条, 跳过 ${res.skipped_count} 条`)
+      }
+      await loadMeta()
+      loadRows(selShops)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '写入失败')
+    } finally {
+      setJstCommitting(false)
+    }
+  }
+
   // Group by shop
   const grouped = rows.reduce((acc, row) => {
     if (!acc[row.shop_name]) acc[row.shop_name] = []
@@ -136,13 +213,15 @@ export default function DataPage() {
     const groups: { label: string; span: number; cls: string }[] = [
       { label: '', span: 2, cls: '' },
     ]
+    const groupCls = (g: string) =>
+      g === '基础数据' ? 'group-base' : g === '付费推广' ? 'group-promo' : g === '聚水潭数据' ? 'group-jst' : 'group-cost'
     let cur = ''
     let span = 0
     for (const col of NUM_COLS) {
       if (col.group === cur) { span++ }
-      else { if (cur) groups.push({ label: cur, span, cls: cur === '基础数据' ? 'group-base' : cur === '付费推广' ? 'group-promo' : 'group-cost' }); cur = col.group; span = 1 }
+      else { if (cur) groups.push({ label: cur, span, cls: groupCls(cur) }); cur = col.group; span = 1 }
     }
-    if (cur) groups.push({ label: cur, span, cls: cur === '基础数据' ? 'group-base' : cur === '付费推广' ? 'group-promo' : 'group-cost' })
+    if (cur) groups.push({ label: cur, span, cls: groupCls(cur) })
     groups.push({ label: '', span: 1, cls: '' })
     return groups
   }
@@ -166,6 +245,114 @@ export default function DataPage() {
         </div>
       </div>
 
+      {/* ── JST Import Section ─────────────────────────── */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-title"><span>聚水潭 ERP 销售数据导入</span></div>
+        <div className="flex gap-12 items-center" style={{ flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 auto', minWidth: 200 }}>
+            <div
+              className={`upload-zone${jstDragover ? ' dragover' : ''}`}
+              style={{ padding: '16px 20px', marginBottom: 0, display: 'flex', alignItems: 'center', gap: 12, cursor: jstProcessing ? 'wait' : 'pointer' }}
+              onClick={() => { if (!jstProcessing) jstFileRef.current?.click() }}
+              onDragOver={e => { e.preventDefault(); setJstDragover(true) }}
+              onDragLeave={() => setJstDragover(false)}
+              onDrop={e => { e.preventDefault(); setJstDragover(false); if (!jstProcessing && e.dataTransfer.files?.[0]) handleJstFile(e.dataTransfer.files[0]) }}
+            >
+              {jstProcessing ? (
+                <><div className="spinner" style={{ width: 18, height: 18 }} /><span style={{ fontSize: 13, color: 'var(--text-2)' }}>解析匹配中...</span></>
+              ) : (
+                <>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--text-3)', flexShrink: 0 }}>
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                  </svg>
+                  <span style={{ fontSize: 13, color: jstFile ? 'var(--text)' : 'var(--text-2)' }}>
+                    {jstFile ? jstFile.name : '点击或拖拽聚水潭导出的 .xlsx 文件，自动解析匹配'}
+                  </span>
+                </>
+              )}
+              <input ref={jstFileRef} type="file" accept=".xlsx" style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleJstFile(f) }} />
+            </div>
+          </div>
+          <div className="flex gap-8 items-center">
+            <label style={{ fontSize: 12, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>业务日期</label>
+            <input type="date" className="form-input" style={{ width: 150, padding: '5px 10px', fontSize: 13 }}
+              value={jstBizDate} onChange={e => setJstBizDate(e.target.value)} />
+          </div>
+          <button className="btn btn-sm btn-success"
+            disabled={!jstPreviewResult || jstCommitting || !!jstCommitResult}
+            onClick={handleJstCommit}>
+            {jstCommitting ? (<><div className="spinner" style={{ width: 12, height: 12 }} /> 写入中...</>)
+              : jstCommitResult ? '已写入' : '写入数据库'}
+          </button>
+        </div>
+
+        {jstPreviewResult && (
+          <div style={{ marginTop: 16 }}>
+            <div className="flex gap-16" style={{ flexWrap: 'wrap', marginBottom: 12 }}>
+              <StatBadge label="总行数" value={jstPreviewResult.stats.total_rows} />
+              <StatBadge label="匹配成功" value={jstPreviewResult.stats.matched_count} color="var(--success)" />
+              <StatBadge label="未匹配" value={jstPreviewResult.stats.unmatched_count} color="var(--danger)" />
+              {jstCommitResult && <StatBadge label="已写入" value={jstCommitResult.inserted_count} color="var(--success)" />}
+              <StatBadge label="待插入" value={jstPreviewResult.stats.to_insert_count} color="var(--primary)" />
+              <StatBadge label="重复跳过" value={jstPreviewResult.stats.duplicate_count} color="var(--text-3)" />
+              {jstPreviewResult.stats.parse_error_count > 0 && (
+                <StatBadge label="解析错误" value={jstPreviewResult.stats.parse_error_count} color="var(--danger)" />
+              )}
+            </div>
+            <div className="data-table-wrap">
+              <div className="shop-table-header">匹配明细（前 {Math.min(50, jstPreviewResult.match_details.length)} 条）</div>
+              <div style={{ overflowX: 'auto', maxHeight: 400, overflowY: 'auto' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left' }}>源店铺名</th>
+                      <th>状态</th>
+                      <th style={{ textAlign: 'left' }}>匹配店铺名</th>
+                      <th>置信度</th>
+                      <th style={{ textAlign: 'left' }}>候选 Top3</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {jstPreviewResult.match_details.slice(0, 50).map((d, i) => (
+                      <tr key={i}>
+                        <td style={{ textAlign: 'left', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.source_shop_name}</td>
+                        <td>
+                          {d.status === 'matched' ? (
+                            <span className="badge badge-valid">匹配</span>
+                          ) : d.is_ambiguous ? (
+                            <span className="badge badge-validating">歧义</span>
+                          ) : (
+                            <span className="badge badge-invalid">未匹配</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'left' }}>{d.matched_shop_name ?? '-'}</td>
+                        <td>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: d.score >= 0.75 ? 'var(--success)' : d.score >= 0.5 ? 'var(--warning)' : 'var(--danger)' }}>
+                            {(d.score * 100).toFixed(1)}%
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text-2)' }}>
+                          {d.top_candidates.map((c, j) => <span key={j}>{j > 0 && ' · '}{c.shop_name}({(c.score * 100).toFixed(0)}%)</span>)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {jstCommitResult && (
+          <div className="upload-result ok" style={{ marginTop: 12 }}>
+            {jstCommitResult.status === 'already_committed'
+              ? `该批次已提交过 — 插入 ${jstCommitResult.inserted_count} 条, 跳过 ${jstCommitResult.skipped_count} 条`
+              : `写入完成 — 插入 ${jstCommitResult.inserted_count} 条, 跳过 ${jstCommitResult.skipped_count} 条${jstCommitResult.failed_count ? `, 失败 ${jstCommitResult.failed_count} 条` : ''}`}
+          </div>
+        )}
+      </div>
+
       {/* Upload */}
       <div
         className={`upload-zone${dragover ? ' dragover' : ''}`}
@@ -186,7 +373,16 @@ export default function DataPage() {
       <div className="card">
         <div className="flex items-center justify-between mb-16">
           <span className="form-label" style={{ margin: 0 }}>店铺筛选</span>
-          <span style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>已选 {selShops.length}/{shops.length} 个店铺</span>
+          <div className="flex items-center gap-8">
+            <span style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>已选 {selShops.length}/{shops.length} 个店铺</span>
+            <button className="btn btn-sm" onClick={() => { loadMeta(); loadRows(selShops) }} title="刷新数据">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 4 }}>
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
+              刷新
+            </button>
+          </div>
         </div>
         <div className="chip-list">
           <span className={`chip${selShops.length === shops.length && shops.length > 0 ? ' active' : ''}`} onClick={selectAllShops}>全部</span>

@@ -364,6 +364,7 @@ select.form-input { cursor: pointer; }
 .data-table thead th.group-base { background: rgba(99,102,241,0.1); color: #818cf8; }
 .data-table thead th.group-promo { background: rgba(245,158,11,0.1); color: var(--warning); }
 .data-table thead th.group-cost { background: rgba(167,139,250,0.1); color: #a78bfa; }
+.data-table thead th.group-jst { background: rgba(16,185,129,0.1); color: #10b981; }
 .data-table tbody td { padding: 6px 10px; border-bottom: 1px solid rgba(37,40,64,0.6); text-align: center; font-family: var(--font-mono); font-size: 12px; }
 .data-table tbody tr:hover td { background: rgba(99,102,241,0.05); }
 .data-table tbody tr.summary-row td { border-top: 1px solid var(--border-bright); font-weight: 600; background: var(--surface-2); }

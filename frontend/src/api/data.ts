@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { DataRow } from '@/types'
+import type { DataRow, JstUploadResult, JstPreviewResult, JstCommitResult } from '@/types'
 import { useSessionStore } from '@/store/session'
 
 export const fetchShops = async (): Promise<string[]> => {
@@ -62,4 +62,29 @@ export const exportXlsx = async (month: string, shops: string[]): Promise<void> 
   a.download = `店铺数据_${month}.xlsx`
   a.click()
   URL.revokeObjectURL(url)
+}
+
+// ── JST Import API ──────────────────────────────────────
+
+export const jstUpload = async (file: File): Promise<JstUploadResult> => {
+  const fd = new FormData()
+  fd.append('file', file)
+  const res = await apiClient.post('/api/data/jst/upload', fd)
+  return res.data
+}
+
+export const jstPreview = async (uploadToken: string, bizDate?: string): Promise<JstPreviewResult> => {
+  const fd = new FormData()
+  fd.append('upload_token', uploadToken)
+  if (bizDate) fd.append('biz_date', bizDate)
+  const res = await apiClient.post('/api/data/jst/preview', fd)
+  return res.data
+}
+
+export const jstCommit = async (uploadToken: string, previewId: string): Promise<JstCommitResult> => {
+  const fd = new FormData()
+  fd.append('upload_token', uploadToken)
+  fd.append('preview_id', previewId)
+  const res = await apiClient.post('/api/data/jst/commit', fd)
+  return res.data
 }
